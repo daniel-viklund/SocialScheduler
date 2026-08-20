@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Social Scheduler</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <main>
+    <header>
+      <h1>Social Scheduler</h1>
+      <p class="sub">Schedule uploads to YouTube and Instagram</p>
+    </header>
+
+    <section id="connections" class="card">
+      <h2>Connections</h2>
+      <div class="conn-row">
+        <div class="conn" id="conn-youtube">
+          <span class="dot"></span>
+          <span class="conn-name">YouTube</span>
+          <span class="conn-state">checking…</span>
+          <a class="btn small" id="yt-connect" href="/auth/youtube" hidden>Connect YouTube</a>
+        </div>
+        <div class="conn" id="conn-instagram">
+          <span class="dot"></span>
+          <span class="conn-name">Instagram</span>
+          <span class="conn-state">checking…</span>
+          <a class="btn small" id="ig-connect" href="/auth/instagram" hidden>Connect Instagram</a>
+        </div>
+      </div>
+      <p class="hint" id="conn-hint" hidden></p>
+    </section>
+
+    <section class="card">
+      <h2>New scheduled post</h2>
+      <form id="post-form">
+        <label>
+          Video / image file
+          <input type="file" name="file" accept="video/*,image/*" required />
+        </label>
+        <label>
+          Title
+          <input type="text" name="title" maxlength="100" placeholder="My awesome video" required />
+        </label>
+        <label>
+          Description / caption
+          <textarea name="description" rows="3" placeholder="Optional description (YouTube) / caption (Instagram)"></textarea>
+        </label>
+        <div class="row">
+          <label>
+            Publish at
+            <input type="datetime-local" name="scheduledAt" required />
+          </label>
+          <fieldset>
+            <legend>Platforms</legend>
+            <label class="check"><input type="checkbox" name="platforms" value="youtube" checked /> YouTube</label>
+            <label class="check"><input type="checkbox" name="platforms" value="instagram" checked /> Instagram</label>
+          </fieldset>
+        </div>
+        <button type="submit" class="btn primary" id="submit-btn">Schedule</button>
+        <p class="form-msg" id="form-msg" hidden></p>
+      </form>
+    </section>
+
+    <section class="card">
+      <h2>Scheduled posts</h2>
+      <div id="posts"><p class="hint">Loading…</p></div>
+    </section>
+  </main>
+  <script src="app.js"></script>
+</body>
+</html>

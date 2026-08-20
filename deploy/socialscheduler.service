@@ -1,0 +1,29 @@
+[Unit]
+Description=Social Scheduler (YouTube + Instagram upload scheduler)
+Documentation=https://github.com/daniel-viklund/SocialScheduler
+After=network-online.target
+Wants=network-online.target
+# Scheduled posts are the whole point: never stop retrying after a crash loop.
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+User=danne
+WorkingDirectory=/home/danne/socialscheduler
+ExecStart=/usr/bin/node src/server.js
+Restart=always
+RestartSec=5
+Environment=NODE_ENV=production
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=socialscheduler
+
+# The app only ever needs its own directory.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=read-only
+ReadWritePaths=/home/danne/socialscheduler/data
+
+[Install]
+WantedBy=multi-user.target

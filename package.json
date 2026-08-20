@@ -1,0 +1,24 @@
+{
+  "name": "social-scheduler",
+  "version": "1.0.0",
+  "description": "Schedule video/image uploads to YouTube and Instagram",
+  "type": "module",
+  "main": "src/server.js",
+  "scripts": {
+    "start": "node src/server.js",
+    "dev": "node --watch src/server.js",
+    "check:instagram": "node scripts/check-instagram.js",
+    "check:video": "node scripts/check-video.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "better-sqlite3": "^12.2.0",
+    "dotenv": "^16.4.5",
+    "express": "^4.21.2",
+    "googleapis": "^150.0.1",
+    "multer": "^2.0.1",
+    "node-cron": "^3.0.3"
+  }
+}
