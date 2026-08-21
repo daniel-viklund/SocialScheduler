@@ -1,5 +1,23 @@
 const $ = (sel) => document.querySelector(sel);
 
+const fmtBytes = (n) => {
+  if (!Number.isFinite(n)) return '–';
+  const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+  let i = 0;
+  while (n >= 1024 && i < units.length - 1) { n /= 1024; i += 1; }
+  return `${n.toFixed(n < 10 && i > 0 ? 1 : 0)} ${units[i]}`;
+};
+
+const fmtDuration = (secs) => {
+  if (!Number.isFinite(secs) || secs < 0) return '–';
+  if (secs < 90) return `${Math.round(secs)}s`;
+  const m = Math.floor(secs / 60);
+  if (m < 60) return `${m}m`;
+  return `${Math.floor(m / 60)}h ${m % 60}m`;
+};
+
+let maxUploadBytes = Infinity;
+
 async function api(path, opts) {
   const res = await fetch(path, opts);
   const data = await res.json().catch(() => ({}));
@@ -55,6 +73,23 @@ async function loadStatus() {
     if (!igBtn.hidden) igBtn.textContent = 'Reconnect Instagram';
   }
 
+  if (typeof status.maxUploadBytes === 'number') maxUploadBytes = status.maxUploadBytes;
+
+  const box = $('#storage');
+  if (status.storage) {
+    const { total, free, used, uploadsBytes, uploadCount } = status.storage;
+    const pct = total > 0 ? (used / total) * 100 : 0;
+    box.hidden = false;
+    $('#storage-num').textContent = `${fmtBytes(free)} free of ${fmtBytes(total)}`;
+    const bar = $('#storage-bar');
+    bar.style.width = `${Math.min(100, pct).toFixed(1)}%`;
+    bar.className = `bar-fill${pct >= 90 ? ' err' : pct >= 75 ? ' warn' : ''}`;
+    $('#storage-detail').textContent =
+      `${fmtBytes(uploadsBytes)} in ${uploadCount} scheduled file${uploadCount === 1 ? '' : 's'} · ${pct.toFixed(0)}% of disk used`;
+  } else {
+    box.hidden = true;
+  }
+
   const hint = $('#conn-hint');
   if (status.instagram.configured && !status.publicBaseUrl) {
     hint.hidden = false;
@@ -85,6 +120,11 @@ form.addEventListener('submit', async (e) => {
   const platforms = [...form.querySelectorAll('input[name="platforms"]:checked')].map((el) => el.value);
   if (platforms.length === 0) return showMsg('Pick at least one platform', true);
 
+  const file = form.file.files[0];
+  if (file && file.size > maxUploadBytes) {
+    return showMsg(`${fmtBytes(file.size)} exceeds the ${fmtBytes(maxUploadBytes)} upload limit`, true);
+  }
+
   const fd = new FormData();
   fd.append('file', form.file.files[0]);
   fd.append('title', form.title.value);
@@ -96,19 +136,66 @@ form.addEventListener('submit', async (e) => {
   btn.disabled = true;
   btn.textContent = 'Uploading…';
   try {
-    await api('/api/posts', { method: 'POST', body: fd });
+    await uploadWithProgress(fd);
     showMsg('Scheduled ✔', false);
     form.file.value = '';
     form.title.value = '';
     form.description.value = '';
     await loadPosts();
+    await loadStatus();
   } catch (err) {
     showMsg(err.message, true);
   } finally {
     btn.disabled = false;
     btn.textContent = 'Schedule';
+    $('#upload-progress').hidden = true;
   }
 });
+
+// Multi-GB uploads over wifi take tens of minutes, so show real progress
+// rather than leaving the button spinning. XHR is the only way to observe it.
+function uploadWithProgress(fd) {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    const box = $('#upload-progress');
+    const bar = $('#upload-bar');
+    const detail = $('#upload-detail');
+    box.hidden = false;
+    bar.style.width = '0%';
+    bar.className = 'bar-fill';
+    detail.textContent = 'Starting…';
+    const started = Date.now();
+
+    xhr.upload.addEventListener('progress', (e) => {
+      if (!e.lengthComputable) return;
+      const pct = (e.loaded / e.total) * 100;
+      bar.style.width = `${pct.toFixed(1)}%`;
+      const elapsed = (Date.now() - started) / 1000;
+      const rate = e.loaded / elapsed;
+      const eta = rate > 0 ? (e.total - e.loaded) / rate : NaN;
+      detail.textContent =
+        `${pct.toFixed(1)}% · ${fmtBytes(e.loaded)} of ${fmtBytes(e.total)} · ${fmtBytes(rate)}/s · ${fmtDuration(eta)} left`;
+    });
+
+    xhr.addEventListener('load', () => {
+      let data = {};
+      try { data = JSON.parse(xhr.responseText); } catch { /* non-JSON error page */ }
+      if (xhr.status >= 200 && xhr.status < 300) {
+        detail.textContent = 'Done';
+        resolve(data);
+      } else {
+        reject(new Error(data.error || `Request failed (${xhr.status})`));
+      }
+    });
+    xhr.addEventListener('error', () => reject(new Error('Network error during upload — connection dropped')));
+    xhr.addEventListener('abort', () => reject(new Error('Upload cancelled')));
+    xhr.addEventListener('timeout', () => reject(new Error('Upload timed out')));
+
+    xhr.open('POST', '/api/posts');
+    xhr.timeout = 0; // a slow multi-GB upload is normal here
+    xhr.send(fd);
+  });
+}
 
 function showMsg(text, isError) {
   msg.hidden = false;

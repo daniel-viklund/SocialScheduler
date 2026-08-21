@@ -4,13 +4,15 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import express from 'express';
 import multer from 'multer';
-import { UPLOADS_DIR, createPost, listPosts, getPost, deletePost, retryPost } from './db.js';
+import { DATA_DIR, UPLOADS_DIR, createPost, listPosts, getPost, deletePost, retryPost } from './db.js';
 import * as youtube from './youtube.js';
 import * as instagram from './instagram.js';
 import { startScheduler } from './scheduler.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const PORT = process.env.PORT || 3000;
+// Raw camera files and long 4K exports run well past the old 2 GB cap.
+const MAX_UPLOAD_BYTES = Number(process.env.MAX_UPLOAD_GB || 16) * 1024 ** 3;
 
 const app = express();
 app.use(express.json());
@@ -26,11 +28,39 @@ const storage = multer.diskStorage({
 });
 const upload = multer({
   storage,
-  limits: { fileSize: 2 * 1024 * 1024 * 1024 },
+  limits: { fileSize: MAX_UPLOAD_BYTES },
   fileFilter: (req, file, cb) => {
     const ok = file.mimetype.startsWith('video/') || file.mimetype.startsWith('image/');
     cb(ok ? null : new Error('Only video and image files are allowed'), ok);
   },
+});
+
+function storageInfo() {
+  const st = fs.statfsSync(DATA_DIR);
+  const total = st.blocks * st.bsize;
+  const free = st.bavail * st.bsize;
+  let uploadsBytes = 0;
+  let uploadCount = 0;
+  for (const name of fs.readdirSync(UPLOADS_DIR)) {
+    try {
+      const s = fs.statSync(path.join(UPLOADS_DIR, name));
+      if (s.isFile()) {
+        uploadsBytes += s.size;
+        uploadCount += 1;
+      }
+    } catch {
+      // File deleted mid-scan; ignore.
+    }
+  }
+  return { total, free, used: total - free, uploadsBytes, uploadCount };
+}
+
+app.get('/api/storage', (req, res) => {
+  try {
+    res.json(storageInfo());
+  } catch (err) {
+    res.status(500).json({ error: String(err.message || err) });
+  }
 });
 
 app.get('/api/status', (req, res) => {
@@ -44,6 +74,14 @@ app.get('/api/status', (req, res) => {
       redirectUri: instagram.isConfigured() ? instagram.redirectUri() : null,
     },
     publicBaseUrl: process.env.PUBLIC_BASE_URL || null,
+    maxUploadBytes: MAX_UPLOAD_BYTES,
+    storage: (() => {
+      try {
+        return storageInfo();
+      } catch {
+        return null;
+      }
+    })(),
   });
 });
 
@@ -148,10 +186,14 @@ app.get('/auth/instagram/callback', async (req, res) => {
 
 // Multer and route errors end up here so the frontend gets JSON, not an HTML stack trace.
 app.use((err, req, res, next) => {
+  if (err?.code === 'LIMIT_FILE_SIZE') {
+    const gb = (MAX_UPLOAD_BYTES / 1024 ** 3).toFixed(0);
+    return res.status(413).json({ error: `File is larger than the ${gb} GB upload limit (raise MAX_UPLOAD_GB in .env)` });
+  }
   res.status(400).json({ error: String(err.message || err) });
 });
 
-app.listen(PORT, () => {
+const server = app.listen(PORT, () => {
   console.log(`Social Scheduler running at http://localhost:${PORT}`);
   instagram
     .refreshTokenIfNeeded()
@@ -162,3 +204,10 @@ app.listen(PORT, () => {
     .catch(() => {});
   startScheduler();
 });
+
+// Node's default requestTimeout is 5 minutes, which aborts a multi-GB upload
+// mid-stream and answers 408. Uploads here are slow by nature: disable it and
+// rely on the socket dying instead.
+server.requestTimeout = 0;
+server.headersTimeout = 0;
+server.timeout = 0;

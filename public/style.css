@@ -124,3 +124,17 @@ legend { font-size: 14px; color: var(--muted); padding: 0 4px; }
 .targets .error { color: var(--err); }
 
 .post-actions { margin-top: 10px; display: flex; gap: 8px; }
+
+
+/* ---- storage + upload progress bars ---- */
+.storage { margin-top: 14px; }
+.storage-head { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 6px; }
+.storage-label { font-size: 13px; color: var(--muted, #8b94a7); }
+.storage-num { font-size: 13px; font-variant-numeric: tabular-nums; }
+.bar { height: 8px; border-radius: 999px; background: rgba(127, 140, 170, 0.22); overflow: hidden; }
+.bar-fill { height: 100%; width: 0; border-radius: 999px; background: #4c8dff; transition: width 0.3s ease; }
+.bar-fill.warn { background: #e0a12c; }
+.bar-fill.err  { background: #e05c5c; }
+.storage .hint { margin-top: 6px; }
+.upload-progress { margin-top: 12px; }
+.upload-progress .hint { margin-top: 6px; font-variant-numeric: tabular-nums; }

@@ -30,6 +30,15 @@
         </div>
       </div>
       <p class="hint" id="conn-hint" hidden></p>
+
+      <div class="storage" id="storage" hidden>
+        <div class="storage-head">
+          <span class="storage-label">Disk</span>
+          <span class="storage-num" id="storage-num"></span>
+        </div>
+        <div class="bar"><div class="bar-fill" id="storage-bar"></div></div>
+        <p class="hint" id="storage-detail"></p>
+      </div>
     </section>
 
     <section class="card">
@@ -59,6 +68,10 @@
           </fieldset>
         </div>
         <button type="submit" class="btn primary" id="submit-btn">Schedule</button>
+        <div class="upload-progress" id="upload-progress" hidden>
+          <div class="bar"><div class="bar-fill" id="upload-bar"></div></div>
+          <p class="hint" id="upload-detail"></p>
+        </div>
         <p class="form-msg" id="form-msg" hidden></p>
       </form>
     </section>
