@@ -237,22 +237,47 @@ $('#storage-clean').addEventListener('click', async (e) => {
 // Statuses the server lets you edit (mirrors EDITABLE_STATUSES in db.js).
 const EDITABLE = ['scheduled', 'failed', 'partial'];
 
-// Which post is open in the inline editor, so the 10s refresh doesn't wipe it.
-let editingId = null;
+const PLATFORMS = [
+  { key: 'youtube', label: 'YouTube', box: '#posts-youtube' },
+  { key: 'instagram', label: 'Instagram', box: '#posts-instagram' },
+];
+
+const platformLabel = (key) => PLATFORMS.find((p) => p.key === key)?.label ?? key;
+
+// In a per-platform list the post-level status is the wrong thing to show: a
+// "partial" post is a success in one column and a failure in the other.
+const TARGET_BADGE = {
+  pending: { cls: 'scheduled', text: 'scheduled' },
+  processing: { cls: 'processing', text: 'publishing' },
+  done: { cls: 'done', text: 'published' },
+  failed: { cls: 'failed', text: 'failed' },
+};
+
+// Which card is open in the inline editor, so the 10s refresh doesn't wipe it.
+// Keyed by platform too: a post on both platforms is rendered twice, and only
+// the card you clicked should turn into a form.
+let editingKey = null;
 
 async function loadPosts() {
   const posts = await api('/api/posts');
-  const box = $('#posts');
-  if (posts.length === 0) {
-    box.innerHTML = '<p class="hint">Nothing scheduled yet.</p>';
-    return;
+  for (const { key, label, box } of PLATFORMS) {
+    const el = $(box);
+    const mine = posts.filter((post) => post.targets.some((t) => t.platform === key));
+    if (mine.length === 0) {
+      el.innerHTML = `<p class="hint">Nothing scheduled for ${label}.</p>`;
+      continue;
+    }
+    el.innerHTML = '';
+    for (const post of mine) el.appendChild(renderPost(post, key));
   }
-  box.innerHTML = '';
-  for (const post of posts) box.appendChild(renderPost(post));
 }
 
-function renderPost(post) {
-  if (post.id === editingId) return renderEditForm(post);
+function renderPost(post, platform) {
+  const key = `${post.id}:${platform}`;
+  if (key === editingKey) return renderEditForm(post);
+
+  const target = post.targets.find((t) => t.platform === platform);
+  const badge = TARGET_BADGE[target.status] ?? { cls: '', text: target.status };
 
   const el = document.createElement('div');
   el.className = 'post';
@@ -262,44 +287,43 @@ function renderPost(post) {
   head.innerHTML = `
     <span class="post-title"></span>
     <span class="post-time"></span>
-    <span class="badge ${post.status}">${post.status}</span>
+    <span class="badge ${badge.cls}">${badge.text}</span>
   `;
   head.querySelector('.post-title').textContent = post.title;
   head.querySelector('.post-time').textContent = new Date(post.scheduled_at).toLocaleString();
   el.appendChild(head);
 
-  const targets = document.createElement('ul');
-  targets.className = 'targets';
-  for (const t of post.targets) {
-    const li = document.createElement('li');
-    const name = document.createElement('span');
-    name.className = 'platform';
-    name.textContent = t.platform;
-    li.appendChild(name);
-    if (t.status === 'done' && t.result_url) {
-      const a = document.createElement('a');
-      a.href = t.result_url;
-      a.target = '_blank';
-      a.rel = 'noopener';
-      a.textContent = t.result_url;
-      li.appendChild(a);
-    } else if (t.status === 'failed') {
-      const err = document.createElement('span');
-      err.className = 'error';
-      err.textContent = t.error || 'failed';
-      li.appendChild(err);
-    } else {
-      const s = document.createElement('span');
-      s.textContent = t.status;
-      li.appendChild(s);
-    }
-    targets.appendChild(li);
+  el.appendChild(renderFileLine(post));
+
+  // The same post can sit in both lists; say so, so deleting from here is no surprise.
+  const others = post.targets.filter((t) => t.platform !== platform);
+  if (others.length > 0) {
+    const note = document.createElement('p');
+    note.className = 'hint post-note';
+    note.textContent = `Also scheduled for ${others.map((t) => platformLabel(t.platform)).join(', ')}`;
+    el.appendChild(note);
   }
-  el.appendChild(targets);
+
+  // Whatever this platform has to say for itself: a link, an error, or nothing yet.
+  if (target.status === 'done' && target.result_url) {
+    const a = document.createElement('a');
+    a.className = 'post-result';
+    a.href = target.result_url;
+    a.target = '_blank';
+    a.rel = 'noopener';
+    a.textContent = target.result_url;
+    el.appendChild(a);
+  } else if (target.status === 'failed') {
+    const err = document.createElement('p');
+    err.className = 'error post-result';
+    err.textContent = target.error || 'failed';
+    el.appendChild(err);
+  }
 
   const actions = document.createElement('div');
   actions.className = 'post-actions';
-  if (['failed', 'partial'].includes(post.status)) {
+
+  if (target.status === 'failed') {
     const retry = document.createElement('button');
     retry.className = 'btn small';
     retry.textContent = 'Retry failed';
@@ -314,7 +338,7 @@ function renderPost(post) {
     edit.className = 'btn small';
     edit.textContent = 'Edit';
     edit.onclick = () => {
-      editingId = post.id;
+      editingKey = key;
       el.replaceWith(renderEditForm(post));
     };
     actions.appendChild(edit);
@@ -324,7 +348,10 @@ function renderPost(post) {
     del.className = 'btn small danger';
     del.textContent = 'Delete';
     del.onclick = async () => {
-      if (!confirm(`Delete "${post.title}"?`)) return;
+      const also = others.length > 0
+        ? ` This removes it from ${post.targets.map((t) => platformLabel(t.platform)).join(' and ')}.`
+        : '';
+      if (!confirm(`Delete "${post.title}"?${also}`)) return;
       await api(`/api/posts/${post.id}`, { method: 'DELETE' }).catch((e) => alert(e.message));
       // Deleting frees the file too, so the disk figures are stale until we refetch.
       await loadPosts();
@@ -335,6 +362,38 @@ function renderPost(post) {
   if (actions.children.length > 0) el.appendChild(actions);
 
   return el;
+}
+
+// Which file goes out with this post — a missing one is worth shouting about,
+// since the upload will fail at publish time rather than now.
+function renderFileLine(post) {
+  const line = document.createElement('p');
+  line.className = 'post-file';
+
+  if (post.file_missing) {
+    const gone = document.createElement('span');
+    gone.className = 'error';
+    gone.textContent = `${post.original_name} — file missing from the server`;
+    line.appendChild(gone);
+    return line;
+  }
+
+  const a = document.createElement('a');
+  a.href = `/media/${post.file_name}`;
+  a.target = '_blank';
+  a.rel = 'noopener';
+  a.textContent = post.original_name;
+  line.appendChild(a);
+
+  const meta = document.createElement('span');
+  meta.className = 'post-file-meta';
+  meta.textContent = [
+    Number.isFinite(post.file_size) ? fmtBytes(post.file_size) : null,
+    post.mime_type,
+  ].filter(Boolean).join(' · ');
+  line.appendChild(meta);
+
+  return line;
 }
 
 function renderEditForm(post) {
@@ -374,7 +433,7 @@ function renderEditForm(post) {
 
   const err = el.querySelector('.form-msg');
   const close = async () => {
-    editingId = null;
+    editingKey = null;
     await loadPosts();
   };
 
@@ -412,6 +471,6 @@ function renderEditForm(post) {
 loadStatus().catch(console.error);
 loadPosts().catch(console.error);
 setInterval(() => {
-  if (editingId === null) loadPosts().catch(() => {});
+  if (editingKey === null) loadPosts().catch(() => {});
 }, 10000);
 setInterval(() => loadStatus().catch(() => {}), 30000);

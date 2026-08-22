@@ -133,8 +133,20 @@ app.get('/api/status', (req, res) => {
   });
 });
 
+// The UI shows which file a post will publish, so every post it renders carries
+// the file's size — and says so loudly when the file has gone missing.
+function withFile(post) {
+  if (!post) return post;
+  try {
+    const st = fs.statSync(path.join(UPLOADS_DIR, post.file_name));
+    return { ...post, file_size: st.size, file_missing: false };
+  } catch {
+    return { ...post, file_size: null, file_missing: true };
+  }
+}
+
 app.get('/api/posts', (req, res) => {
-  res.json(listPosts());
+  res.json(listPosts().map(withFile));
 });
 
 app.post('/api/posts', upload.single('file'), (req, res) => {
@@ -169,7 +181,7 @@ app.post('/api/posts', upload.single('file'), (req, res) => {
       scheduledAt: new Date(scheduledAt).toISOString(),
       platforms,
     });
-    res.status(201).json(post);
+    res.status(201).json(withFile(post));
   } catch (err) {
     reject(500, String(err.message || err));
   }
@@ -197,7 +209,7 @@ app.patch('/api/posts/:id', (req, res) => {
   });
   // Null means the guard in the UPDATE bit: the scheduler claimed it in between.
   if (!updated) return res.status(409).json({ error: 'Post is being published right now — reload to see its result' });
-  res.json(updated);
+  res.json(withFile(updated));
 });
 
 app.delete('/api/posts/:id', (req, res) => {
@@ -217,7 +229,7 @@ app.post('/api/posts/:id/retry', (req, res) => {
   if (!['failed', 'partial'].includes(post.status)) {
     return res.status(409).json({ error: 'Only failed or partially failed posts can be retried' });
   }
-  res.json(retryPost(post.id));
+  res.json(withFile(retryPost(post.id)));
 });
 
 app.get('/auth/youtube', (req, res) => {

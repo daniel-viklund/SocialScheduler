@@ -131,11 +131,17 @@ legend { font-size: 14px; color: var(--muted); padding: 0 4px; }
 .badge.failed { color: var(--err); border-color: var(--err); }
 .badge.partial { color: var(--warn); border-color: var(--warn); }
 
-.targets { margin: 10px 0 0; padding: 0; list-style: none; font-size: 14px; }
-.targets li { display: flex; gap: 8px; align-items: baseline; margin: 4px 0; flex-wrap: wrap; }
-.targets .platform { font-weight: 600; text-transform: capitalize; min-width: 80px; }
-.targets a { color: var(--accent); }
-.targets .error { color: var(--err); }
+.error { color: var(--err); }
+
+/* which file this post publishes */
+.post-file { display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; margin: 8px 0 0; font-size: 13px; }
+.post-file a { color: var(--accent); text-decoration: none; word-break: break-all; }
+.post-file a:hover { text-decoration: underline; }
+.post-file-meta { color: var(--muted); font-variant-numeric: tabular-nums; }
+
+.post-note { margin-top: 6px; font-size: 13px; }
+.post-result { display: block; margin: 8px 0 0; font-size: 14px; word-break: break-all; }
+a.post-result { color: var(--accent); }
 
 .post-actions { margin-top: 10px; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
 
