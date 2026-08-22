@@ -92,6 +92,20 @@ export function setTargetStatus(targetId, { status, resultUrl = null, error = nu
     .run(status, resultUrl, error, nowIso(), targetId);
 }
 
+// Only a post that hasn't gone out yet is worth editing; the WHERE guard makes
+// the status check atomic, so an edit can't land while the scheduler publishes.
+export const EDITABLE_STATUSES = ['scheduled', 'failed', 'partial'];
+
+export function updatePost(id, { title, description, scheduledAt }) {
+  const info = db
+    .prepare(
+      `UPDATE posts SET title = ?, description = ?, scheduled_at = ?
+       WHERE id = ? AND status IN ('scheduled', 'failed', 'partial')`
+    )
+    .run(title, description, scheduledAt, id);
+  return info.changes === 0 ? null : getPost(id);
+}
+
 export function deletePost(id) {
   const post = getPost(id);
   if (!post) return null;
@@ -110,6 +124,11 @@ export function retryPost(id) {
   });
   tx();
   return getPost(id);
+}
+
+// Every file the DB still points at. Anything else in uploads/ is dead weight.
+export function usedFileNames() {
+  return new Set(db.prepare(`SELECT file_name FROM posts`).all().map((r) => r.file_name));
 }
 
 export function getSetting(key) {

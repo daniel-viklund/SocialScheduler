@@ -4,7 +4,10 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import express from 'express';
 import multer from 'multer';
-import { DATA_DIR, UPLOADS_DIR, createPost, listPosts, getPost, deletePost, retryPost } from './db.js';
+import {
+  DATA_DIR, UPLOADS_DIR, EDITABLE_STATUSES,
+  createPost, listPosts, getPost, updatePost, deletePost, retryPost, usedFileNames,
+} from './db.js';
 import * as youtube from './youtube.js';
 import * as instagram from './instagram.js';
 import { startScheduler } from './scheduler.js';
@@ -35,29 +38,74 @@ const upload = multer({
   },
 });
 
-function storageInfo() {
-  const st = fs.statfsSync(DATA_DIR);
-  const total = st.blocks * st.bsize;
-  const free = st.bavail * st.bsize;
-  let uploadsBytes = 0;
-  let uploadCount = 0;
+// An interrupted upload leaves its half-written file behind (multer only cleans
+// up files whose write had already finished), so uploads/ can hold more than the
+// posts do. Count the two apart instead of reporting the directory as "scheduled".
+function scanUploads() {
+  const known = usedFileNames();
+  const scan = { uploadsBytes: 0, uploadCount: 0, orphanBytes: 0, orphanCount: 0, orphans: [] };
   for (const name of fs.readdirSync(UPLOADS_DIR)) {
     try {
-      const s = fs.statSync(path.join(UPLOADS_DIR, name));
-      if (s.isFile()) {
-        uploadsBytes += s.size;
-        uploadCount += 1;
+      const st = fs.statSync(path.join(UPLOADS_DIR, name));
+      if (!st.isFile()) continue;
+      if (known.has(name)) {
+        scan.uploadsBytes += st.size;
+        scan.uploadCount += 1;
+      } else {
+        scan.orphanBytes += st.size;
+        scan.orphanCount += 1;
+        scan.orphans.push({ name, size: st.size, mtimeMs: st.mtimeMs });
       }
     } catch {
       // File deleted mid-scan; ignore.
     }
   }
-  return { total, free, used: total - free, uploadsBytes, uploadCount };
+  return scan;
+}
+
+function storageInfo() {
+  const st = fs.statfsSync(DATA_DIR);
+  const total = st.blocks * st.bsize;
+  const free = st.bavail * st.bsize;
+  const { orphans, ...scan } = scanUploads();
+  return { total, free, used: total - free, ...scan };
+}
+
+// A file is only safe to delete once nothing references it *and* it has sat
+// untouched long enough that it can't be an upload still streaming in — an
+// in-flight write keeps bumping mtime, so an idle file is a dead one.
+const ORPHAN_IDLE_MS = 60 * 60 * 1000;
+
+function sweepOrphans(idleMs = ORPHAN_IDLE_MS) {
+  const cutoff = Date.now() - idleMs;
+  const removed = { count: 0, bytes: 0 };
+  for (const f of scanUploads().orphans) {
+    if (f.mtimeMs > cutoff) continue;
+    try {
+      fs.rmSync(path.join(UPLOADS_DIR, f.name), { force: true });
+      removed.count += 1;
+      removed.bytes += f.size;
+      console.log(`[cleanup] removed orphaned upload ${f.name} (${(f.size / 1024 ** 3).toFixed(2)} GB)`);
+    } catch (err) {
+      console.warn(`[cleanup] could not remove ${f.name}: ${err.message || err}`);
+    }
+  }
+  return removed;
 }
 
 app.get('/api/storage', (req, res) => {
   try {
     res.json(storageInfo());
+  } catch (err) {
+    res.status(500).json({ error: String(err.message || err) });
+  }
+});
+
+// Manual "Clean up" from the UI: the user is watching, so a shorter idle window
+// is enough to tell a dead file from an upload in flight.
+app.post('/api/storage/cleanup', (req, res) => {
+  try {
+    res.json({ ...sweepOrphans(5 * 60 * 1000), storage: storageInfo() });
   } catch (err) {
     res.status(500).json({ error: String(err.message || err) });
   }
@@ -125,6 +173,31 @@ app.post('/api/posts', upload.single('file'), (req, res) => {
   } catch (err) {
     reject(500, String(err.message || err));
   }
+});
+
+app.patch('/api/posts/:id', (req, res) => {
+  const post = getPost(Number(req.params.id));
+  if (!post) return res.status(404).json({ error: 'Post not found' });
+  if (!EDITABLE_STATUSES.includes(post.status)) {
+    return res.status(409).json({ error: `A ${post.status} post can no longer be edited` });
+  }
+
+  const title = String(req.body.title ?? post.title).trim();
+  const description = String(req.body.description ?? post.description);
+  const scheduledAt = req.body.scheduledAt ?? post.scheduled_at;
+  if (!title) return res.status(400).json({ error: 'Title is required' });
+  if (Number.isNaN(Date.parse(scheduledAt))) {
+    return res.status(400).json({ error: 'A valid schedule time is required' });
+  }
+
+  const updated = updatePost(post.id, {
+    title,
+    description,
+    scheduledAt: new Date(scheduledAt).toISOString(),
+  });
+  // Null means the guard in the UPDATE bit: the scheduler claimed it in between.
+  if (!updated) return res.status(409).json({ error: 'Post is being published right now — reload to see its result' });
+  res.json(updated);
 });
 
 app.delete('/api/posts/:id', (req, res) => {
@@ -203,6 +276,18 @@ const server = app.listen(PORT, () => {
     })
     .catch(() => {});
   startScheduler();
+
+  // Sweep leftovers from interrupted uploads at boot, then once an hour.
+  const sweep = () => {
+    try {
+      const { count, bytes } = sweepOrphans();
+      if (count > 0) console.log(`[cleanup] freed ${(bytes / 1024 ** 3).toFixed(2)} GB from ${count} orphaned file(s)`);
+    } catch (err) {
+      console.warn('[cleanup] sweep failed:', err.message || err);
+    }
+  };
+  sweep();
+  setInterval(sweep, 60 * 60 * 1000).unref();
 });
 
 // Node's default requestTimeout is 5 minutes, which aborts a multi-GB upload

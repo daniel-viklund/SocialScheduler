@@ -86,7 +86,14 @@ npm run check:video -- ride.mp4
 - A cron job (`* * * * *`) picks up posts whose time has come and uploads to each
   selected platform independently; per-platform status, result links, and errors are
   shown in the UI, with a **Retry failed** button for anything that errored.
+- `PATCH /api/posts/:id` edits the title, description, and publish time of a post that
+  hasn't gone out yet (`scheduled`, `failed`, `partial`); the file itself can't be swapped.
 - Uploaded media is served at `/media/<file>` so Instagram can fetch it via `PUBLIC_BASE_URL`.
+- An interrupted upload leaves a half-written file in `data/uploads/`. Files no post
+  references are swept at boot and hourly once they've been idle for an hour, and the
+  **Clean up** button in the UI (`POST /api/storage/cleanup`) removes them on demand
+  after 5 minutes of idleness. The disk readout counts scheduled files and leftovers
+  separately.
 
 Keep the app running (e.g. `pm2`, `launchd`, or a small VPS) so scheduled posts
 actually publish — nothing uploads while the process is stopped.

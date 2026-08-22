@@ -16,6 +16,12 @@ const fmtDuration = (secs) => {
   return `${Math.floor(m / 60)}h ${m % 60}m`;
 };
 
+// <input type="datetime-local"> wants wall-clock time, not UTC.
+const toLocalInput = (date) => {
+  const d = new Date(date);
+  return new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 16);
+};
+
 let maxUploadBytes = Infinity;
 
 async function api(path, opts) {
@@ -86,6 +92,14 @@ async function loadStatus() {
     bar.className = `bar-fill${pct >= 90 ? ' err' : pct >= 75 ? ' warn' : ''}`;
     $('#storage-detail').textContent =
       `${fmtBytes(uploadsBytes)} in ${uploadCount} scheduled file${uploadCount === 1 ? '' : 's'} · ${pct.toFixed(0)}% of disk used`;
+
+    const orphanBox = $('#storage-orphans');
+    const orphanCount = status.storage.orphanCount ?? 0;
+    orphanBox.hidden = orphanCount === 0;
+    if (orphanCount > 0) {
+      $('#storage-orphan-text').textContent =
+        `${fmtBytes(status.storage.orphanBytes)} in ${orphanCount} leftover file${orphanCount === 1 ? '' : 's'} from interrupted uploads`;
+    }
   } else {
     box.hidden = true;
   }
@@ -110,8 +124,7 @@ const msg = $('#form-msg');
 // Default the schedule field to one hour from now.
 const inOneHour = new Date(Date.now() + 60 * 60 * 1000);
 inOneHour.setSeconds(0, 0);
-const local = new Date(inOneHour.getTime() - inOneHour.getTimezoneOffset() * 60000);
-form.scheduledAt.value = local.toISOString().slice(0, 16);
+form.scheduledAt.value = toLocalInput(inOneHour);
 
 form.addEventListener('submit', async (e) => {
   e.preventDefault();
@@ -203,7 +216,29 @@ function showMsg(text, isError) {
   msg.className = `form-msg ${isError ? 'err' : 'ok'}`;
 }
 
+$('#storage-clean').addEventListener('click', async (e) => {
+  const btn = e.currentTarget;
+  btn.disabled = true;
+  btn.textContent = 'Cleaning…';
+  try {
+    const r = await api('/api/storage/cleanup', { method: 'POST' });
+    await loadStatus();
+    if (r.count === 0) alert('Nothing removed — the leftover files are still too fresh to be sure they are not uploading.');
+  } catch (err) {
+    alert(err.message);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = 'Clean up';
+  }
+});
+
 /* ---------- post list ---------- */
+
+// Statuses the server lets you edit (mirrors EDITABLE_STATUSES in db.js).
+const EDITABLE = ['scheduled', 'failed', 'partial'];
+
+// Which post is open in the inline editor, so the 10s refresh doesn't wipe it.
+let editingId = null;
 
 async function loadPosts() {
   const posts = await api('/api/posts');
@@ -217,6 +252,8 @@ async function loadPosts() {
 }
 
 function renderPost(post) {
+  if (post.id === editingId) return renderEditForm(post);
+
   const el = document.createElement('div');
   el.className = 'post';
 
@@ -272,6 +309,16 @@ function renderPost(post) {
     };
     actions.appendChild(retry);
   }
+  if (EDITABLE.includes(post.status)) {
+    const edit = document.createElement('button');
+    edit.className = 'btn small';
+    edit.textContent = 'Edit';
+    edit.onclick = () => {
+      editingId = post.id;
+      el.replaceWith(renderEditForm(post));
+    };
+    actions.appendChild(edit);
+  }
   if (post.status !== 'processing') {
     const del = document.createElement('button');
     del.className = 'btn small danger';
@@ -279,7 +326,9 @@ function renderPost(post) {
     del.onclick = async () => {
       if (!confirm(`Delete "${post.title}"?`)) return;
       await api(`/api/posts/${post.id}`, { method: 'DELETE' }).catch((e) => alert(e.message));
-      loadPosts();
+      // Deleting frees the file too, so the disk figures are stale until we refetch.
+      await loadPosts();
+      await loadStatus();
     };
     actions.appendChild(del);
   }
@@ -288,9 +337,81 @@ function renderPost(post) {
   return el;
 }
 
+function renderEditForm(post) {
+  const el = document.createElement('form');
+  el.className = 'post post-edit';
+
+  el.innerHTML = `
+    <label>
+      Title
+      <input type="text" name="title" maxlength="100" required />
+    </label>
+    <label>
+      Description / caption
+      <textarea name="description" rows="3"></textarea>
+    </label>
+    <label class="edit-when">
+      Publish at
+      <input type="datetime-local" name="scheduledAt" required />
+    </label>
+    <p class="hint edit-file"></p>
+    <div class="post-actions">
+      <button type="submit" class="btn small primary">Save</button>
+      <button type="button" class="btn small" data-cancel>Cancel</button>
+      <span class="form-msg err" hidden></span>
+    </div>
+  `;
+  const fields = {
+    title: el.querySelector('[name="title"]'),
+    description: el.querySelector('[name="description"]'),
+    scheduledAt: el.querySelector('[name="scheduledAt"]'),
+  };
+  fields.title.value = post.title;
+  fields.description.value = post.description || '';
+  fields.scheduledAt.value = toLocalInput(post.scheduled_at);
+  // The file itself can't be swapped — re-upload for that — so say which one this edits.
+  el.querySelector('.edit-file').textContent = `File: ${post.original_name} (unchanged)`;
+
+  const err = el.querySelector('.form-msg');
+  const close = async () => {
+    editingId = null;
+    await loadPosts();
+  };
+
+  el.querySelector('[data-cancel]').onclick = close;
+  el.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    err.hidden = true;
+    const save = el.querySelector('button[type="submit"]');
+    save.disabled = true;
+    save.textContent = 'Saving…';
+    try {
+      await api(`/api/posts/${post.id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          title: fields.title.value,
+          description: fields.description.value,
+          scheduledAt: new Date(fields.scheduledAt.value).toISOString(),
+        }),
+      });
+      await close();
+    } catch (e2) {
+      err.hidden = false;
+      err.textContent = e2.message;
+      save.disabled = false;
+      save.textContent = 'Save';
+    }
+  });
+
+  return el;
+}
+
 /* ---------- boot ---------- */
 
 loadStatus().catch(console.error);
 loadPosts().catch(console.error);
-setInterval(() => loadPosts().catch(() => {}), 10000);
+setInterval(() => {
+  if (editingId === null) loadPosts().catch(() => {});
+}, 10000);
 setInterval(() => loadStatus().catch(() => {}), 30000);

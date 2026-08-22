@@ -1,6 +1,11 @@
 * { box-sizing: border-box; }
 
+/* .btn/.storage-orphans set display, which outranks the UA's [hidden] rule —
+   without this, anything we hide in JS stays on screen. */
+[hidden] { display: none !important; }
+
 :root {
+  color-scheme: dark;
   --bg: #0f1115;
   --card: #171a21;
   --border: #2a2f3a;
@@ -60,6 +65,15 @@ form input[type="file"] {
   font: inherit;
 }
 form textarea { resize: vertical; }
+
+/* The UA's calendar glyph is near-black on our dark inputs. brightness(0) flattens
+   it to black whatever colour it started as, then invert(1) makes it white. */
+input[type="datetime-local"]::-webkit-calendar-picker-indicator {
+  filter: brightness(0) invert(1);
+  opacity: 0.75;
+  cursor: pointer;
+}
+input[type="datetime-local"]::-webkit-calendar-picker-indicator:hover { opacity: 1; }
 
 .row { display: flex; gap: 20px; flex-wrap: wrap; align-items: flex-start; }
 .row > label { flex: 1; min-width: 220px; }
@@ -123,7 +137,16 @@ legend { font-size: 14px; color: var(--muted); padding: 0 4px; }
 .targets a { color: var(--accent); }
 .targets .error { color: var(--err); }
 
-.post-actions { margin-top: 10px; display: flex; gap: 8px; }
+.post-actions { margin-top: 10px; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+
+.storage-orphans { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.storage-orphans .btn { flex-shrink: 0; }
+
+.post-edit { display: block; }
+.post-edit label { margin-bottom: 10px; }
+.post-edit .edit-when { max-width: 260px; }
+.post-edit .edit-file { margin: 0 0 10px; }
+.post-edit .form-msg { margin: 0; }
 
 
 /* ---- storage + upload progress bars ---- */
