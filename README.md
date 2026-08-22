@@ -80,6 +80,27 @@ Check an export before scheduling it:
 npm run check:video -- ride.mp4
 ```
 
+## Deploying to the Pi
+
+`./scripts/deploy.sh` (or `npm run deploy`) pushes the current commit from your Mac to
+the Pi over ssh. The Pi has no git checkout and this repo is private, so the script
+mirrors the committed tree with rsync rather than pulling from GitHub:
+
+```bash
+./scripts/deploy.sh            # deploy HEAD, restart the service, health-check it
+./scripts/deploy.sh --dry-run  # show what would change, touch nothing
+```
+
+It refuses to run on a dirty working tree, tars the current source into
+`~/socialscheduler-backups/` first (keeping the last 5), re-runs `npm ci --omit=dev`
+only when `package-lock.json` changed, restarts the systemd unit, then waits for
+`/api/status` to answer — dumping the journal and failing loudly if it doesn't.
+`data/`, `.env` and `node_modules/` on the Pi are never touched.
+
+Host, directory, service name and port come from `SS_HOST` / `SS_DIR` / `SS_SERVICE` /
+`SS_PORT` (defaults: `srv-soundtarget.local`, `~/socialscheduler`, `socialscheduler`,
+and the `PORT` from the Pi's `.env`).
+
 ## How it works
 
 - `POST /api/posts` stores the file in `data/uploads/` and a row in SQLite (`data/scheduler.db`).

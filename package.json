@@ -8,7 +8,8 @@
     "start": "node src/server.js",
     "dev": "node --watch src/server.js",
     "check:instagram": "node scripts/check-instagram.js",
-    "check:video": "node scripts/check-video.js"
+    "check:video": "node scripts/check-video.js",
+    "deploy": "./scripts/deploy.sh"
   },
   "engines": {
     "node": ">=18"
