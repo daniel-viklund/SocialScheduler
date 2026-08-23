@@ -107,6 +107,26 @@ legend { font-size: 14px; color: var(--muted); padding: 0 4px; }
 
 .hint { color: var(--muted); font-size: 14px; margin: 12px 0 0; }
 
+.list-filter { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin: 0 0 16px; }
+.filter-label { font-size: 13px; color: var(--muted); }
+.chips { display: flex; gap: 6px; flex-wrap: wrap; }
+.chip {
+  padding: 4px 12px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--card);
+  color: var(--muted);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.chip:hover { color: var(--text); }
+.chip.is-on { background: var(--accent); border-color: var(--accent); color: #fff; }
+.chip .chip-count { opacity: 0.7; font-weight: 400; }
+
+.filtered-out { margin-top: 12px; font-style: italic; }
+
 .post {
   border: 1px solid var(--border);
   border-radius: 10px;

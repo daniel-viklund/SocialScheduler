@@ -244,6 +244,51 @@ const PLATFORMS = [
 
 const platformLabel = (key) => PLATFORMS.find((p) => p.key === key)?.label ?? key;
 
+// Filters act on the target status for the column the post is rendered in, so
+// a post that published to YouTube but failed on Instagram sits under
+// "Published" in one list and "Failed" in the other.
+const FILTERS = [
+  { key: 'pending', label: 'Pending', empty: 'Nothing pending for', match: (t) => t.status === 'pending' || t.status === 'processing' },
+  { key: 'published', label: 'Published', empty: 'Nothing published to', match: (t) => t.status === 'done' },
+  { key: 'failed', label: 'Failed', empty: 'Nothing failed on', match: (t) => t.status === 'failed' },
+  { key: 'all', label: 'All', empty: 'Nothing scheduled for', match: () => true },
+];
+
+let filterKey = localStorage.getItem('ss-filter') || 'pending';
+if (!FILTERS.some((f) => f.key === filterKey)) filterKey = 'pending';
+
+// Kept so switching filters re-renders instantly instead of refetching.
+let lastPosts = [];
+
+function renderFilterChips() {
+  const box = $('#filter-chips');
+  box.innerHTML = '';
+  for (const f of FILTERS) {
+    const chip = document.createElement('button');
+    chip.type = 'button';
+    chip.className = `chip${f.key === filterKey ? ' is-on' : ''}`;
+    chip.textContent = f.label;
+
+    // A count on each chip means you can see there are failures without
+    // having to click through every filter to find them.
+    const n = lastPosts.reduce((sum, post) => sum + post.targets.filter(f.match).length, 0);
+    if (n > 0 && f.key !== 'all') {
+      const count = document.createElement('span');
+      count.className = 'chip-count';
+      count.textContent = ` ${n}`;
+      chip.appendChild(count);
+    }
+
+    chip.onclick = () => {
+      filterKey = f.key;
+      localStorage.setItem('ss-filter', f.key);
+      editingKey = null; // the card being edited may not survive the new filter
+      renderPosts();
+    };
+    box.appendChild(chip);
+  }
+}
+
 // In a per-platform list the post-level status is the wrong thing to show: a
 // "partial" post is a success in one column and a failure in the other.
 const TARGET_BADGE = {
@@ -259,16 +304,40 @@ const TARGET_BADGE = {
 let editingKey = null;
 
 async function loadPosts() {
-  const posts = await api('/api/posts');
+  lastPosts = await api('/api/posts');
+  renderPosts();
+}
+
+function renderPosts() {
+  const filter = FILTERS.find((f) => f.key === filterKey);
+  renderFilterChips();
+
   for (const { key, label, box } of PLATFORMS) {
     const el = $(box);
-    const mine = posts.filter((post) => post.targets.some((t) => t.platform === key));
-    if (mine.length === 0) {
-      el.innerHTML = `<p class="hint">Nothing scheduled for ${label}.</p>`;
+    const mine = lastPosts.filter((post) => post.targets.some((t) => t.platform === key));
+    const shown = mine.filter((post) => filter.match(post.targets.find((t) => t.platform === key)));
+
+    // Say what the filter is holding back, so an empty list is never a mystery.
+    const hidden = mine.length - shown.length;
+    el.innerHTML = '';
+
+    if (shown.length === 0) {
+      const msg = document.createElement('p');
+      msg.className = 'hint';
+      msg.textContent = hidden > 0
+        ? `${filter.empty} ${label} — ${hidden} hidden by this filter.`
+        : `${filter.empty} ${label}.`;
+      el.appendChild(msg);
       continue;
     }
-    el.innerHTML = '';
-    for (const post of mine) el.appendChild(renderPost(post, key));
+
+    for (const post of shown) el.appendChild(renderPost(post, key));
+    if (hidden > 0) {
+      const note = document.createElement('p');
+      note.className = 'hint filtered-out';
+      note.textContent = `${hidden} more hidden by the ${filter.label} filter`;
+      el.appendChild(note);
+    }
   }
 }
 
@@ -468,6 +537,7 @@ function renderEditForm(post) {
 
 /* ---------- boot ---------- */
 
+renderFilterChips();
 loadStatus().catch(console.error);
 loadPosts().catch(console.error);
 setInterval(() => {

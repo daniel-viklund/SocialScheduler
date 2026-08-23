@@ -110,6 +110,8 @@ and the `PORT` from the Pi's `.env`).
 - The UI lists posts per platform — a post targeting both appears in both lists, each
   showing that platform's own state — and every card names the file it will publish,
   flagging one that has gone missing from `data/uploads/`.
+- The lists show pending posts by default; **Published**, **Failed** and **All** chips
+  filter both lists at once, each carrying a count. The choice is remembered per browser.
 - `PATCH /api/posts/:id` edits the title, description, and publish time of a post that
   hasn't gone out yet (`scheduled`, `failed`, `partial`); the file itself can't be swapped.
 - Uploaded media is served at `/media/<file>` so Instagram can fetch it via `PUBLIC_BASE_URL`.
