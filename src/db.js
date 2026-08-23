@@ -65,7 +65,18 @@ export function getPost(id) {
 }
 
 export function listPosts() {
-  const posts = db.prepare(`SELECT * FROM posts ORDER BY scheduled_at DESC`).all();
+  // Soonest first, so the next post to go out is at the top. Posts that have
+  // already run sink below the queue, newest first — otherwise something
+  // published months ago would sit above everything still waiting.
+  const posts = db
+    .prepare(
+      `SELECT * FROM posts
+       ORDER BY
+         CASE WHEN status IN ('scheduled', 'processing') THEN 0 ELSE 1 END,
+         CASE WHEN status IN ('scheduled', 'processing') THEN scheduled_at END ASC,
+         scheduled_at DESC`
+    )
+    .all();
   const targets = db.prepare(`SELECT * FROM post_targets`).all();
   const byPost = new Map();
   for (const t of targets) {
