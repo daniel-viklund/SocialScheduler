@@ -23,6 +23,7 @@ const toLocalInput = (date) => {
 };
 
 let maxUploadBytes = Infinity;
+let instagramLimits = { reelMaxBytes: Infinity, imageMaxBytes: Infinity };
 
 async function api(path, opts) {
   const res = await fetch(path, opts);
@@ -80,6 +81,7 @@ async function loadStatus() {
   }
 
   if (typeof status.maxUploadBytes === 'number') maxUploadBytes = status.maxUploadBytes;
+  if (status.instagramLimits) instagramLimits = status.instagramLimits;
 
   const box = $('#storage');
   if (status.storage) {
@@ -137,6 +139,18 @@ form.addEventListener('submit', async (e) => {
   if (file && file.size > maxUploadBytes) {
     return showMsg(`${fmtBytes(file.size)} exceeds the ${fmtBytes(maxUploadBytes)} upload limit`, true);
   }
+  // The server checks the file properly once it has it, but size alone rules
+  // out most exports and that is worth knowing before a multi-GB upload.
+  if (file && platforms.includes('instagram')) {
+    const isVideo = file.type.startsWith('video/');
+    const limit = isVideo ? instagramLimits.reelMaxBytes : instagramLimits.imageMaxBytes;
+    if (file.size > limit) {
+      return showMsg(
+        `${fmtBytes(file.size)} is over Instagram's ${fmtBytes(limit)} ${isVideo ? 'Reels' : 'image'} limit — export a smaller file or untick Instagram`,
+        true
+      );
+    }
+  }
 
   const fd = new FormData();
   fd.append('file', form.file.files[0]);
@@ -149,8 +163,9 @@ form.addEventListener('submit', async (e) => {
   btn.disabled = true;
   btn.textContent = 'Uploading…';
   try {
-    await uploadWithProgress(fd);
-    showMsg('Scheduled ✔', false);
+    const created = await uploadWithProgress(fd);
+    const notes = created.warnings?.length ? ` — ${created.warnings.join(' · ')}` : '';
+    showMsg(`Scheduled ✔${notes}`, false);
     form.file.value = '';
     form.title.value = '';
     form.description.value = '';

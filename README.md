@@ -71,10 +71,22 @@ days of expiry; the UI shows the remaining days.
 ### Media requirements
 
 Reels published through the API must be MP4/MOV, H.264/HEVC + AAC, ≤ 1920 px wide,
-23–60 fps, 3 s – 15 min, and **≤ 300 MB**. The metadata atom must sit at the front of
-the file (`-movflags +faststart`), which most editors do not do by default.
+23–60 fps, 3 s – 15 min, and **≤ 300 MB**. Feed images must be JPEG, ≤ 8 MB, with an
+aspect ratio between 4:5 and 1.91:1. Instagram only reports a bad file when the post
+comes due, so the app checks these limits itself when a post targets Instagram:
 
-Check an export before scheduling it:
+- The form refuses an oversized file before uploading it.
+- `POST /api/posts` probes the uploaded file with `ffprobe` and rejects it with every
+  problem listed (the file is deleted, nothing is scheduled). YouTube-only posts are
+  not checked — YouTube takes almost anything.
+- The one thing it fixes rather than rejects is the metadata atom sitting at the end of
+  the file (most editors' default): the upload is losslessly remuxed in place with
+  `-movflags +faststart`, and the response says so.
+
+This needs `ffmpeg`/`ffprobe` installed on the server (`apt install ffmpeg` on the Pi).
+Without it, Instagram posts are rejected with a message saying so.
+
+To check an export before uploading it:
 
 ```bash
 npm run check:video -- ride.mp4

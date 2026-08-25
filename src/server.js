@@ -10,6 +10,7 @@ import {
 } from './db.js';
 import * as youtube from './youtube.js';
 import * as instagram from './instagram.js';
+import { prepareForInstagram, MediaError, REEL_MAX_BYTES, IMAGE_MAX_BYTES } from './mediacheck.js';
 import { startScheduler } from './scheduler.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -123,6 +124,8 @@ app.get('/api/status', (req, res) => {
     },
     publicBaseUrl: process.env.PUBLIC_BASE_URL || null,
     maxUploadBytes: MAX_UPLOAD_BYTES,
+    // So the form can bounce an oversized Instagram file before uploading it.
+    instagramLimits: { reelMaxBytes: REEL_MAX_BYTES, imageMaxBytes: IMAGE_MAX_BYTES },
     storage: (() => {
       try {
         return storageInfo();
@@ -149,7 +152,7 @@ app.get('/api/posts', (req, res) => {
   res.json(listPosts().map(withFile));
 });
 
-app.post('/api/posts', upload.single('file'), (req, res) => {
+app.post('/api/posts', upload.single('file'), async (req, res) => {
   // Multer has already written the file to disk; don't leave it orphaned on rejection.
   const reject = (code, error) => {
     if (req.file) fs.rm(req.file.path, { force: true }, () => {});
@@ -172,6 +175,18 @@ app.post('/api/posts', upload.single('file'), (req, res) => {
       return reject(400, 'YouTube only accepts video files');
     }
 
+    // Instagram would only report a bad export when the post comes due, so
+    // check its limits now (and quietly fix the moov position if that is all).
+    const warnings = [];
+    if (platforms.includes('instagram')) {
+      try {
+        const verdict = await prepareForInstagram(req.file.path, req.file.mimetype);
+        warnings.push(...verdict.warnings);
+      } catch (err) {
+        return reject(err instanceof MediaError ? 400 : 500, err.message);
+      }
+    }
+
     const post = createPost({
       title: title.trim(),
       description,
@@ -181,7 +196,7 @@ app.post('/api/posts', upload.single('file'), (req, res) => {
       scheduledAt: new Date(scheduledAt).toISOString(),
       platforms,
     });
-    res.status(201).json(withFile(post));
+    res.status(201).json({ ...withFile(post), warnings });
   } catch (err) {
     reject(500, String(err.message || err));
   }
