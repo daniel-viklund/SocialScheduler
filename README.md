@@ -135,3 +135,6 @@ and the `PORT` from the Pi's `.env`).
 
 Keep the app running (e.g. `pm2`, `launchd`, or a small VPS) so scheduled posts
 actually publish — nothing uploads while the process is stopped.
+
+## Instagram limits
+Instagram limits the video format, use this command to make the API accept the file: `ffmpeg -i in.mp4 -map 0:v:0 -map 0:a:0 -c:v libx264 -preset slow -crf 18 -maxrate 20M -bufsize 40M -pix_fmt yuv420p -profile:v high -level 4.2 -c:a copy -movflags +faststart out_ig.mp4`
