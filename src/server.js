@@ -163,13 +163,17 @@ app.post('/api/posts', upload.single('file'), async (req, res) => {
     const platforms = [].concat(req.body.platforms || []);
 
     if (!req.file) return reject(400, 'A video or image file is required');
-    if (!title?.trim()) return reject(400, 'Title is required');
     if (!scheduledAt || Number.isNaN(Date.parse(scheduledAt))) {
       return reject(400, 'A valid schedule time is required');
     }
     const valid = ['youtube', 'instagram'];
     if (platforms.length === 0 || platforms.some((p) => !valid.includes(p))) {
       return reject(400, 'Pick at least one platform (youtube, instagram)');
+    }
+    // Instagram posts carry a caption and nothing else; only YouTube needs a
+    // title, and it refuses an empty one.
+    if (platforms.includes('youtube') && !title?.trim()) {
+      return reject(400, 'Title is required for YouTube');
     }
     if (platforms.includes('youtube') && !req.file.mimetype.startsWith('video/')) {
       return reject(400, 'YouTube only accepts video files');
@@ -188,7 +192,7 @@ app.post('/api/posts', upload.single('file'), async (req, res) => {
     }
 
     const post = createPost({
-      title: title.trim(),
+      title: (title || '').trim(),
       description,
       fileName: req.file.filename,
       originalName: req.file.originalname,
@@ -212,7 +216,9 @@ app.patch('/api/posts/:id', (req, res) => {
   const title = String(req.body.title ?? post.title).trim();
   const description = String(req.body.description ?? post.description);
   const scheduledAt = req.body.scheduledAt ?? post.scheduled_at;
-  if (!title) return res.status(400).json({ error: 'Title is required' });
+  if (!title && post.targets.some((t) => t.platform === 'youtube')) {
+    return res.status(400).json({ error: 'Title is required for YouTube' });
+  }
   if (Number.isNaN(Date.parse(scheduledAt))) {
     return res.status(400).json({ error: 'A valid schedule time is required' });
   }

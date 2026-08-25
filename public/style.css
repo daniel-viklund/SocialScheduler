@@ -52,6 +52,7 @@ header h1 { margin: 0; font-size: 28px; }
 form label { display: block; margin-bottom: 14px; font-size: 14px; color: var(--muted); }
 form input[type="text"],
 form input[type="datetime-local"],
+form select,
 form textarea,
 form input[type="file"] {
   display: block;
@@ -65,6 +66,18 @@ form input[type="file"] {
   font: inherit;
 }
 form textarea { resize: vertical; }
+/* The UA select is a different height and colour from our inputs on macOS, so
+   it is restyled like the rest and given its own chevron. */
+form select {
+  appearance: none;
+  cursor: pointer;
+  padding-right: 34px;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 8'%3E%3Cpath fill='none' stroke='%238b93a7' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round' d='M1 1.5 6 6.5l5-5'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 12px center;
+  background-size: 12px 8px;
+}
+form select:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 
 /* The UA's calendar glyph is near-black on our dark inputs. brightness(0) flattens
    it to black whatever colour it started as, then invert(1) makes it white. */

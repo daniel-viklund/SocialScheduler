@@ -1,8 +1,8 @@
 # Social Scheduler
 
 A small self-hosted web app for scheduling uploads to **YouTube** and **Instagram**.
-Pick a video (or image, for Instagram), write a title and caption, choose a publish
-time — a background scheduler uploads it automatically when the time comes.
+Pick a video (or image, for Instagram), pick the platform, write the text, choose a
+publish time — a background scheduler uploads it automatically when the time comes.
 
 - **YouTube** — YouTube Data API v3 with OAuth (one-click "Connect YouTube" in the UI)
 - **Instagram** — Meta Graph API content publishing (Reels for videos, feed posts for images)
@@ -119,13 +119,23 @@ and the `PORT` from the Pi's `.env`).
 - A cron job (`* * * * *`) picks up posts whose time has come and uploads to each
   selected platform independently; per-platform status, result links, and errors are
   shown in the UI, with a **Retry failed** button for anything that errored.
+- A post targets one platform, chosen from a dropdown. The text fields follow it:
+  YouTube gets a **Title** (required, it refuses an empty one) plus a description,
+  Instagram gets a single **Caption**, which is the only text a post shows there.
+  Switching to Instagram carries anything already typed as a title into the caption.
+- The API still accepts several platforms per post (`platforms` repeated), and posts
+  made that way still render in both lists. The scheduler builds an Instagram caption
+  as `title` + blank line + `description`, so an older post that only had a title
+  still publishes correctly, and editing it folds the two into one caption.
 - The UI lists posts per platform — a post targeting both appears in both lists, each
   showing that platform's own state — and every card names the file it will publish,
-  flagging one that has gone missing from `data/uploads/`.
+  flagging one that has gone missing from `data/uploads/`. A caption-only post is
+  listed by the first line of its caption.
 - The lists show pending posts by default; **Published**, **Failed** and **All** chips
   filter both lists at once, each carrying a count. The choice is remembered per browser.
 - `PATCH /api/posts/:id` edits the title, description, and publish time of a post that
   hasn't gone out yet (`scheduled`, `failed`, `partial`); the file itself can't be swapped.
+  An empty title is rejected only when the post targets YouTube.
 - Uploaded media is served at `/media/<file>` so Instagram can fetch it via `PUBLIC_BASE_URL`.
 - An interrupted upload leaves a half-written file in `data/uploads/`. Files no post
   references are swept at boot and hourly once they've been idle for an hour, and the

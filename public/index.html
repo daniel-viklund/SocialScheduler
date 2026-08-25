@@ -52,24 +52,26 @@
           Video / image file
           <input type="file" name="file" accept="video/*,image/*" required />
         </label>
-        <label>
+        <label id="title-field">
           Title
-          <input type="text" name="title" maxlength="100" placeholder="My awesome video" required />
+          <input type="text" name="title" maxlength="100" placeholder="My awesome video" />
         </label>
         <label>
-          Description / caption
-          <textarea name="description" rows="3" placeholder="Optional description (YouTube) / caption (Instagram)"></textarea>
+          <span id="text-label">Description</span>
+          <textarea name="description" rows="3"></textarea>
         </label>
         <div class="row">
           <label>
             Publish at
             <input type="datetime-local" name="scheduledAt" required />
           </label>
-          <fieldset>
-            <legend>Platforms</legend>
-            <label class="check"><input type="checkbox" name="platforms" value="youtube" checked /> YouTube</label>
-            <label class="check"><input type="checkbox" name="platforms" value="instagram" checked /> Instagram</label>
-          </fieldset>
+          <label>
+            Platform
+            <select name="platform" id="platform-select">
+              <option value="youtube">YouTube</option>
+              <option value="instagram">Instagram</option>
+            </select>
+          </label>
         </div>
         <button type="submit" class="btn primary" id="submit-btn">Schedule</button>
         <div class="upload-progress" id="upload-progress" hidden>

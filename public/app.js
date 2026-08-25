@@ -123,6 +123,44 @@ async function loadStatus() {
 const form = $('#post-form');
 const msg = $('#form-msg');
 
+// Instagram shows exactly one piece of text on a post, so it gets one field.
+// YouTube has a real title and a separate description.
+const PLATFORM_FIELDS = {
+  youtube: {
+    title: true,
+    label: 'Description',
+    placeholder: 'Optional description',
+    maxlength: 5000,
+  },
+  instagram: {
+    title: false,
+    label: 'Caption',
+    placeholder: 'The caption shown under the post — hashtags and all',
+    maxlength: 2200,
+  },
+};
+
+const platformSelect = $('#platform-select');
+
+function applyPlatformFields() {
+  const spec = PLATFORM_FIELDS[platformSelect.value];
+  // Moving to a caption-only platform: keep whatever was typed as a title
+  // rather than silently dropping it, since it is all one text over there.
+  if (!spec.title && form.title.value.trim()) {
+    form.description.value = [form.title.value.trim(), form.description.value]
+      .filter((t) => t.trim())
+      .join('\n\n');
+    form.title.value = '';
+  }
+  $('#title-field').hidden = !spec.title;
+  $('#text-label').textContent = spec.label;
+  form.description.placeholder = spec.placeholder;
+  form.description.maxLength = spec.maxlength;
+}
+
+platformSelect.addEventListener('change', applyPlatformFields);
+applyPlatformFields();
+
 // Default the schedule field to one hour from now.
 const inOneHour = new Date(Date.now() + 60 * 60 * 1000);
 inOneHour.setSeconds(0, 0);
@@ -132,8 +170,10 @@ form.addEventListener('submit', async (e) => {
   e.preventDefault();
   msg.hidden = true;
 
-  const platforms = [...form.querySelectorAll('input[name="platforms"]:checked')].map((el) => el.value);
-  if (platforms.length === 0) return showMsg('Pick at least one platform', true);
+  const platforms = [platformSelect.value];
+  if (PLATFORM_FIELDS[platformSelect.value].title && !form.title.value.trim()) {
+    return showMsg('Title is required for YouTube', true);
+  }
 
   const file = form.file.files[0];
   if (file && file.size > maxUploadBytes) {
@@ -259,6 +299,18 @@ const PLATFORMS = [
 
 const platformLabel = (key) => PLATFORMS.find((p) => p.key === key)?.label ?? key;
 
+// Instagram posts carry only a caption, so the card names them by its first
+// line instead of showing an empty heading.
+function postHeading(post) {
+  if (post.title) return post.title;
+  const line = (post.description || '').split('\n').map((l) => l.trim()).find(Boolean);
+  if (!line) return '(no caption)';
+  return line.length > 80 ? `${line.slice(0, 79)}…` : line;
+}
+
+// What Instagram will actually show, matching how the scheduler builds it.
+const captionOf = (post) => [post.title, post.description].filter(Boolean).join('\n\n');
+
 // Filters act on the target status for the column the post is rendered in, so
 // a post that published to YouTube but failed on Instagram sits under
 // "Published" in one list and "Failed" in the other.
@@ -373,7 +425,7 @@ function renderPost(post, platform) {
     <span class="post-time"></span>
     <span class="badge ${badge.cls}">${badge.text}</span>
   `;
-  head.querySelector('.post-title').textContent = post.title;
+  head.querySelector('.post-title').textContent = postHeading(post);
   head.querySelector('.post-time').textContent = new Date(post.scheduled_at).toLocaleString();
   el.appendChild(head);
 
@@ -484,14 +536,18 @@ function renderEditForm(post) {
   const el = document.createElement('form');
   el.className = 'post post-edit';
 
+  // An Instagram-only post is edited as the single caption it really is —
+  // including any text that was typed into Title before this was a dropdown.
+  const captionOnly = post.targets.every((t) => t.platform === 'instagram');
+
   el.innerHTML = `
-    <label>
+    <label${captionOnly ? ' hidden' : ''}>
       Title
-      <input type="text" name="title" maxlength="100" required />
+      <input type="text" name="title" maxlength="100" />
     </label>
     <label>
-      Description / caption
-      <textarea name="description" rows="3"></textarea>
+      ${captionOnly ? 'Caption' : 'Description'}
+      <textarea name="description" rows="3" maxlength="${captionOnly ? 2200 : 5000}"></textarea>
     </label>
     <label class="edit-when">
       Publish at
@@ -510,7 +566,7 @@ function renderEditForm(post) {
     scheduledAt: el.querySelector('[name="scheduledAt"]'),
   };
   fields.title.value = post.title;
-  fields.description.value = post.description || '';
+  fields.description.value = captionOnly ? captionOf(post) : (post.description || '');
   fields.scheduledAt.value = toLocalInput(post.scheduled_at);
   // The file itself can't be swapped — re-upload for that — so say which one this edits.
   el.querySelector('.edit-file').textContent = `File: ${post.original_name} (unchanged)`;
@@ -533,7 +589,9 @@ function renderEditForm(post) {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          title: fields.title.value,
+          // Caption-only posts fold everything into the description, so the
+          // text in the box is exactly what gets published.
+          title: captionOnly ? '' : fields.title.value,
           description: fields.description.value,
           scheduledAt: new Date(fields.scheduledAt.value).toISOString(),
         }),
