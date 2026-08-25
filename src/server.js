@@ -1,4 +1,5 @@
 import 'dotenv/config';
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -20,6 +21,35 @@ const MAX_UPLOAD_BYTES = Number(process.env.MAX_UPLOAD_GB || 16) * 1024 ** 3;
 
 const app = express();
 app.use(express.json());
+
+// Cloudflare rewrites our `max-age=0` into a 4-hour *browser* TTL for .js/.css,
+// so after a deploy a browser keeps running the old front-end until that
+// expires. Stamping the asset URLs with a version that changes whenever the
+// files do sidesteps the whole thing: the HTML is never cached (Cloudflare does
+// not cache HTML by default, and we say no-cache), and a new version string
+// means a URL the cache has never seen.
+const ASSET_VERSION = (() => {
+  try {
+    const stamp = ['app.js', 'style.css']
+      .map((f) => fs.statSync(path.join(ROOT, 'public', f)).mtimeMs)
+      .join('-');
+    return crypto.createHash('sha1').update(stamp).digest('hex').slice(0, 8);
+  } catch {
+    return String(Date.now());
+  }
+})();
+
+const INDEX_HTML = fs
+  .readFileSync(path.join(ROOT, 'public', 'index.html'), 'utf8')
+  .replace(/(href="style\.css|src="app\.js)"/g, `$1?v=${ASSET_VERSION}"`);
+
+const sendIndex = (req, res) => {
+  res.set('Cache-Control', 'no-cache');
+  res.type('html').send(INDEX_HTML);
+};
+app.get('/', sendIndex);
+app.get('/index.html', sendIndex);
+
 app.use(express.static(path.join(ROOT, 'public')));
 app.use('/media', express.static(UPLOADS_DIR));
 
