@@ -52,6 +52,8 @@ header h1 { margin: 0; font-size: 28px; }
 form label { display: block; margin-bottom: 14px; font-size: 14px; color: var(--muted); }
 form input[type="text"],
 form input[type="datetime-local"],
+form input[type="date"],
+form input[type="time"],
 form select,
 form textarea,
 form input[type="file"] {
@@ -81,12 +83,16 @@ form select:focus-visible { outline: 2px solid var(--accent); outline-offset: 1p
 
 /* The UA's calendar glyph is near-black on our dark inputs. brightness(0) flattens
    it to black whatever colour it started as, then invert(1) makes it white. */
-input[type="datetime-local"]::-webkit-calendar-picker-indicator {
+input[type="datetime-local"]::-webkit-calendar-picker-indicator,
+input[type="date"]::-webkit-calendar-picker-indicator,
+input[type="time"]::-webkit-calendar-picker-indicator {
   filter: brightness(0) invert(1);
   opacity: 0.75;
   cursor: pointer;
 }
-input[type="datetime-local"]::-webkit-calendar-picker-indicator:hover { opacity: 1; }
+input[type="datetime-local"]::-webkit-calendar-picker-indicator:hover,
+input[type="date"]::-webkit-calendar-picker-indicator:hover,
+input[type="time"]::-webkit-calendar-picker-indicator:hover { opacity: 1; }
 
 .row { display: flex; gap: 20px; flex-wrap: wrap; align-items: flex-start; }
 .row > label { flex: 1; min-width: 220px; }
@@ -200,3 +206,46 @@ a.post-result { color: var(--accent); }
 .storage .hint { margin-top: 6px; }
 .upload-progress { margin-top: 12px; }
 .upload-progress .hint { margin-top: 6px; font-variant-numeric: tabular-nums; }
+
+
+/* ---- reschedule all ---- */
+.card-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 16px; }
+.card-head h2 { margin: 0; }
+
+.resched {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 14px 16px 16px;
+  margin-bottom: 14px;
+  background: var(--bg);
+}
+.resched .row > label { min-width: 150px; }
+.resched-days { margin-bottom: 14px; }
+.resched .day-pick {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin: 4px 16px 4px 0;
+  color: var(--text);
+  font-size: 14px;
+}
+.resched .day-pick input { accent-color: var(--accent); margin: 0; }
+.resched-order { max-width: 240px; }
+/* sits beside the Order select, so line it up with the control not the label */
+.resched [data-reshuffle] { align-self: flex-end; margin-bottom: 20px; }
+.resched-preview { max-height: 240px; overflow-y: auto; border: 1px solid var(--border); border-radius: 8px; }
+.resched-preview:empty { display: none; }
+.resched-line {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 6px 10px;
+  font-size: 13px;
+  border-bottom: 1px solid var(--border);
+}
+.resched-line:last-child { border-bottom: none; }
+.resched-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.resched-when { color: var(--muted); white-space: nowrap; flex-shrink: 0; font-variant-numeric: tabular-nums; }
+.resched-when b { color: var(--text); font-weight: 600; }
+.resched .post-actions { margin-top: 12px; }
+.resched .form-msg { margin: 0; }

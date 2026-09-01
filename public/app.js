@@ -406,6 +406,9 @@ function renderPosts() {
       el.appendChild(note);
     }
   }
+
+  // Bulk-reschedule buttons and any open preview track the same data.
+  for (const { key } of PLATFORMS) reschedUI[key]?.update();
 }
 
 function renderPost(post, platform) {
@@ -608,9 +611,251 @@ function renderEditForm(post) {
   return el;
 }
 
+/* ---------- reschedule all ---------- */
+
+// "3× per week" and friends map onto a spread of weekdays; the checkboxes stay
+// editable for people whose week doesn't match ours.
+const DAY_NAMES = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+const DAY_ORDER = [1, 2, 3, 4, 5, 6, 0]; // the checkbox row runs Mon..Sun
+const CADENCE_DAYS = {
+  1: [6],
+  2: [2, 6],
+  3: [1, 3, 5],
+  4: [0, 1, 3, 5],
+  5: [1, 2, 3, 4, 5],
+  6: [1, 2, 3, 4, 5, 6],
+  7: [0, 1, 2, 3, 4, 5, 6],
+};
+
+const ORDER_SORTS = {
+  keep: { label: 'Keep current order', sort: (posts) => posts },
+  oldest: {
+    label: 'Oldest upload first',
+    sort: (posts) => [...posts].sort((a, b) => a.created_at.localeCompare(b.created_at) || a.id - b.id),
+  },
+  newest: {
+    label: 'Newest upload first',
+    sort: (posts) => [...posts].sort((a, b) => b.created_at.localeCompare(a.created_at) || b.id - a.id),
+  },
+  shuffle: { label: 'Shuffle', sort: null }, // stable per-panel shuffle, handled in update()
+};
+
+// Only posts still waiting to go out can be bulk-moved; soonest first, so the
+// publish order you already arranged is what gets re-spaced.
+const reschedulable = (platform) =>
+  lastPosts
+    .filter((p) => p.status === 'scheduled' && p.targets.some((t) => t.platform === platform && t.status === 'pending'))
+    .sort((a, b) => a.scheduled_at.localeCompare(b.scheduled_at) || a.id - b.id);
+
+// One future Date per post: walk forward from the start date, taking every
+// ticked weekday at the chosen time and skipping anything already in the past.
+function computeSlots(count, days, time, startStr) {
+  if (days.length === 0 || !/^\d{2}:\d{2}/.test(time || '')) return null;
+  const cur = new Date(`${startStr}T00:00:00`);
+  if (Number.isNaN(cur.getTime())) return null;
+  const [h, m] = time.split(':').map(Number);
+  cur.setHours(h, m, 0, 0);
+  const now = Date.now();
+  const slots = [];
+  while (slots.length < count) {
+    if (days.includes(cur.getDay()) && cur.getTime() > now) slots.push(new Date(cur));
+    cur.setDate(cur.getDate() + 1);
+  }
+  return slots;
+}
+
+const fmtSlot = (d) =>
+  d.toLocaleString(undefined, { weekday: 'short', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+const fmtDay = (d) => d.toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' });
+
+const reschedUI = {};
+
+function initResched(platform) {
+  const btn = $(`#resched-btn-${platform}`);
+  const panel = $(`#resched-${platform}`);
+  let saved = {};
+  try { saved = JSON.parse(localStorage.getItem(`ss-resched-${platform}`)) || {}; } catch { /* stale */ }
+
+  panel.innerHTML = `
+    <form>
+      <div class="row">
+        <label>How often
+          <select name="cadence">
+            ${[1, 2, 3, 4, 5, 6, 7].map((n) => `<option value="${n}">${n === 7 ? 'Every day' : `${n}\u00d7 per week`}</option>`).join('')}
+            <option value="custom">Custom days</option>
+          </select>
+        </label>
+        <label>Post at
+          <input type="time" name="time" required />
+        </label>
+        <label>Starting
+          <input type="date" name="start" required />
+        </label>
+      </div>
+      <fieldset class="resched-days">
+        <legend>On days</legend>
+        ${DAY_ORDER.map((d) => `<label class="day-pick"><input type="checkbox" value="${d}" />${DAY_NAMES[d]}</label>`).join('')}
+      </fieldset>
+      <div class="row">
+        <label class="resched-order">Order
+          <select name="order">
+            ${Object.entries(ORDER_SORTS).map(([k, o]) => `<option value="${k}">${o.label}</option>`).join('')}
+          </select>
+        </label>
+        <button type="button" class="btn small" data-reshuffle hidden>Shuffle again</button>
+      </div>
+      <div class="resched-preview"></div>
+      <p class="hint resched-summary"></p>
+      <p class="hint resched-warn error" hidden></p>
+      <div class="post-actions">
+        <button type="submit" class="btn small primary" data-apply>Apply new schedule</button>
+        <button type="button" class="btn small" data-close>Cancel</button>
+        <span class="form-msg err" hidden></span>
+      </div>
+    </form>
+  `;
+
+  const el = (sel) => panel.querySelector(sel);
+  const els = {
+    form: el('form'),
+    cadence: el('[name="cadence"]'),
+    time: el('[name="time"]'),
+    start: el('[name="start"]'),
+    order: el('[name="order"]'),
+    days: [...panel.querySelectorAll('.resched-days input')],
+    reshuffle: el('[data-reshuffle]'),
+    preview: el('.resched-preview'),
+    summary: el('.resched-summary'),
+    warn: el('.resched-warn'),
+    apply: el('[data-apply]'),
+    msg: el('.form-msg'),
+  };
+
+  const setDays = (days) => els.days.forEach((c) => { c.checked = days.includes(Number(c.value)); });
+  els.cadence.value = String(saved.cadence ?? 3);
+  if (!els.cadence.value) els.cadence.value = '3'; // saved value is no longer an option
+  els.time.value = saved.time || '18:00';
+  els.order.value = saved.order && ORDER_SORTS[saved.order] ? saved.order : 'keep';
+  setDays(Array.isArray(saved.days) ? saved.days : CADENCE_DAYS[3]);
+
+  const shuffleRank = new Map();
+  let pending = []; // the { id, scheduledAt } changes the preview currently shows
+
+  function update() {
+    const posts = reschedulable(platform);
+    btn.hidden = posts.length === 0;
+    if (posts.length === 0) panel.hidden = true;
+    if (panel.hidden) return;
+
+    const days = els.days.filter((c) => c.checked).map((c) => Number(c.value));
+    const slots = computeSlots(posts.length, days, els.time.value, els.start.value);
+    els.apply.disabled = !slots;
+    els.reshuffle.hidden = els.order.value !== 'shuffle';
+    if (!slots) {
+      pending = [];
+      els.preview.innerHTML = '';
+      els.summary.textContent = 'Tick at least one day (and set a time and start date) to see the new schedule.';
+      els.warn.hidden = true;
+      return;
+    }
+
+    let ordered;
+    if (els.order.value === 'shuffle') {
+      for (const p of posts) if (!shuffleRank.has(p.id)) shuffleRank.set(p.id, Math.random());
+      ordered = [...posts].sort((a, b) => shuffleRank.get(a.id) - shuffleRank.get(b.id));
+    } else {
+      ordered = ORDER_SORTS[els.order.value].sort(posts);
+    }
+    pending = ordered.map((p, i) => ({ id: p.id, scheduledAt: slots[i].toISOString() }));
+
+    els.preview.innerHTML = '';
+    ordered.forEach((p, i) => {
+      const row = document.createElement('div');
+      row.className = 'resched-line';
+      const name = document.createElement('span');
+      name.className = 'resched-name';
+      name.textContent = postHeading(p);
+      const when = document.createElement('span');
+      when.className = 'resched-when';
+      when.append(`${fmtSlot(new Date(p.scheduled_at))} \u2192 `);
+      const b = document.createElement('b');
+      b.textContent = fmtSlot(slots[i]);
+      when.append(b);
+      row.append(name, when);
+      els.preview.appendChild(row);
+    });
+
+    els.summary.textContent =
+      `${posts.length} post${posts.length === 1 ? '' : 's'} \u00b7 ${days.length}\u00d7 per week \u00b7 ` +
+      (posts.length === 1 ? `lands ${fmtDay(slots[0])}` : `${fmtDay(slots[0])} \u2013 ${fmtDay(slots[slots.length - 1])}`);
+
+    const elsewhere = ordered.filter((p) => p.targets.some((t) => t.platform !== platform)).length;
+    els.warn.hidden = elsewhere === 0;
+    if (elsewhere > 0) {
+      els.warn.textContent = `${elsewhere} of these also target another platform and will move there too.`;
+    }
+  }
+
+  els.cadence.addEventListener('change', () => {
+    if (els.cadence.value !== 'custom') setDays(CADENCE_DAYS[Number(els.cadence.value)]);
+    update();
+  });
+  for (const c of els.days) {
+    c.addEventListener('change', () => {
+      els.cadence.value = 'custom';
+      update();
+    });
+  }
+  for (const input of [els.time, els.start, els.order]) input.addEventListener('change', update);
+  els.reshuffle.addEventListener('click', () => { shuffleRank.clear(); update(); });
+
+  btn.addEventListener('click', () => {
+    panel.hidden = !panel.hidden;
+    if (!panel.hidden) {
+      els.start.value = toLocalInput(new Date()).slice(0, 10);
+      els.msg.hidden = true;
+      update();
+    }
+  });
+  el('[data-close]').addEventListener('click', () => { panel.hidden = true; });
+
+  els.form.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    if (pending.length === 0) return;
+    els.msg.hidden = true;
+    els.apply.disabled = true;
+    els.apply.textContent = 'Applying\u2026';
+    try {
+      const r = await api('/api/posts/reschedule', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ changes: pending }),
+      });
+      localStorage.setItem(`ss-resched-${platform}`, JSON.stringify({
+        cadence: els.cadence.value,
+        time: els.time.value,
+        order: els.order.value,
+        days: els.days.filter((c) => c.checked).map((c) => Number(c.value)),
+      }));
+      panel.hidden = true;
+      await loadPosts();
+      if (r.skipped > 0) alert(`${r.skipped} post(s) could not be moved \u2014 they were being published while you rescheduled.`);
+    } catch (err) {
+      els.msg.hidden = false;
+      els.msg.textContent = err.message;
+    } finally {
+      els.apply.disabled = false;
+      els.apply.textContent = 'Apply new schedule';
+    }
+  });
+
+  reschedUI[platform] = { update };
+}
+
 /* ---------- boot ---------- */
 
 renderFilterChips();
+for (const { key } of PLATFORMS) initResched(key);
 loadStatus().catch(console.error);
 loadPosts().catch(console.error);
 setInterval(() => {

@@ -117,6 +117,22 @@ export function updatePost(id, { title, description, scheduledAt }) {
   return info.changes === 0 ? null : getPost(id);
 }
 
+// "Reschedule all" moves many posts at once. Each UPDATE carries the same
+// editable-status guard as updatePost, so a post the scheduler claimed in the
+// meantime is skipped rather than yanked around mid-publish.
+export function bulkReschedule(changes) {
+  const stmt = db.prepare(
+    `UPDATE posts SET scheduled_at = ? WHERE id = ? AND status IN ('scheduled', 'failed', 'partial')`
+  );
+  const tx = db.transaction(() => {
+    let updated = 0;
+    for (const { id, scheduledAt } of changes) updated += stmt.run(scheduledAt, id).changes;
+    return updated;
+  });
+  const updated = tx();
+  return { updated, skipped: changes.length - updated };
+}
+
 export function deletePost(id) {
   const post = getPost(id);
   if (!post) return null;

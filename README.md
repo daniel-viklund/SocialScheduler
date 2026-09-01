@@ -7,6 +7,8 @@ publish time — a background scheduler uploads it automatically when the time c
 - **YouTube** — YouTube Data API v3 with OAuth (one-click "Connect YouTube" in the UI)
 - **Instagram** — Meta Graph API content publishing (Reels for videos, feed posts for images)
 - Express + SQLite + node-cron, no build step
+- **Reschedule all** — spread every pending post for a platform over a weekly
+  cadence (e.g. 3× per week on Mon/Wed/Fri at 18:00), with a preview before applying
 
 ## Quick start
 

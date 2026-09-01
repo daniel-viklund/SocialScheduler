@@ -7,7 +7,7 @@ import express from 'express';
 import multer from 'multer';
 import {
   DATA_DIR, UPLOADS_DIR, EDITABLE_STATUSES,
-  createPost, listPosts, getPost, updatePost, deletePost, retryPost, usedFileNames,
+  createPost, listPosts, getPost, updatePost, deletePost, retryPost, usedFileNames, bulkReschedule,
 } from './db.js';
 import * as youtube from './youtube.js';
 import * as instagram from './instagram.js';
@@ -261,6 +261,30 @@ app.patch('/api/posts/:id', (req, res) => {
   // Null means the guard in the UPDATE bit: the scheduler claimed it in between.
   if (!updated) return res.status(409).json({ error: 'Post is being published right now — reload to see its result' });
   res.json(withFile(updated));
+});
+
+// Bulk "reschedule all": the client computes a new time for every post (it has
+// the list and shows a preview before committing), the server applies them in
+// one transaction with the same editable-status guard as a single edit.
+app.post('/api/posts/reschedule', (req, res) => {
+  const changes = req.body?.changes;
+  if (!Array.isArray(changes) || changes.length === 0 || changes.length > 1000) {
+    return res.status(400).json({ error: 'changes must be a non-empty array of { id, scheduledAt }' });
+  }
+  const seen = new Set();
+  const clean = [];
+  for (const c of changes) {
+    const id = Number(c?.id);
+    if (!Number.isInteger(id) || seen.has(id)) {
+      return res.status(400).json({ error: 'Every change needs a unique numeric post id' });
+    }
+    if (!c?.scheduledAt || Number.isNaN(Date.parse(c.scheduledAt))) {
+      return res.status(400).json({ error: `Post ${id} needs a valid schedule time` });
+    }
+    seen.add(id);
+    clean.push({ id, scheduledAt: new Date(c.scheduledAt).toISOString() });
+  }
+  res.json(bulkReschedule(clean));
 });
 
 app.delete('/api/posts/:id', (req, res) => {

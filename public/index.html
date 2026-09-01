@@ -88,12 +88,22 @@
     </div>
 
     <section class="card">
-      <h2>Scheduled for YouTube</h2>
+      <div class="card-head">
+        <h2>Scheduled for YouTube</h2>
+        <button type="button" class="btn small" id="resched-btn-youtube" hidden
+          title="Spread every pending YouTube post over a new cadence">Reschedule all…</button>
+      </div>
+      <div class="resched" id="resched-youtube" hidden></div>
       <div id="posts-youtube"><p class="hint">Loading…</p></div>
     </section>
 
     <section class="card">
-      <h2>Scheduled for Instagram</h2>
+      <div class="card-head">
+        <h2>Scheduled for Instagram</h2>
+        <button type="button" class="btn small" id="resched-btn-instagram" hidden
+          title="Spread every pending Instagram post over a new cadence">Reschedule all…</button>
+      </div>
+      <div class="resched" id="resched-instagram" hidden></div>
       <div id="posts-instagram"><p class="hint">Loading…</p></div>
     </section>
   </main>
