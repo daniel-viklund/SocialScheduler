@@ -35,6 +35,10 @@ was stopped are published as soon as it starts again.
    then fails with `invalid_grant` until you click **Connect YouTube** again. Once the
    app is in production the token lasts until you revoke it. Consenting shows a
    "Google hasn't verified this app" warning (Advanced → continue) — fine for your own account.
+   Production mode needs a home page and a privacy policy URL on the **Branding** page:
+   use `$PUBLIC_BASE_URL` and `$PUBLIC_BASE_URL/privacy` (the app serves `public/privacy.html`).
+   If the host sits behind Cloudflare Access, add a bypass rule for `/privacy` so the page
+   is actually public.
 
 The app asks Google for a fresh access token at boot and once a day. If the refresh
 token has died, the YouTube row turns red with a **Reconnect YouTube** button and the
