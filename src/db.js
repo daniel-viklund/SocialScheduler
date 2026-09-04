@@ -166,3 +166,7 @@ export function setSetting(key, value) {
   db.prepare(`INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`)
     .run(key, value);
 }
+
+export function deleteSetting(key) {
+  db.prepare(`DELETE FROM settings WHERE key = ?`).run(key);
+}

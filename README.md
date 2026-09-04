@@ -30,6 +30,16 @@ was stopped are published as soon as it starts again.
 4. **APIs & Services → Credentials → Create credentials → OAuth client ID** →
    type **Web application** → add redirect URI `http://localhost:3000/auth/youtube/callback`.
 5. Put the client ID/secret in `.env` as `YT_CLIENT_ID` / `YT_CLIENT_SECRET`.
+7. **OAuth consent screen → Publishing status → Publish app.** While the app is in
+   **Testing**, Google expires every refresh token after 7 days; each YouTube upload
+   then fails with `invalid_grant` until you click **Connect YouTube** again. Once the
+   app is in production the token lasts until you revoke it. Consenting shows a
+   "Google hasn't verified this app" warning (Advanced → continue) — fine for your own account.
+
+The app asks Google for a fresh access token at boot and once a day. If the refresh
+token has died, the YouTube row turns red with a **Reconnect YouTube** button and the
+reason, and any upload that comes due fails with that same message rather than a bare
+`invalid_grant`.
 6. Start the app and click **Connect YouTube** — the refresh token is stored locally
    and uploads work from then on.
 

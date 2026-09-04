@@ -144,7 +144,7 @@ app.post('/api/storage/cleanup', (req, res) => {
 
 app.get('/api/status', (req, res) => {
   res.json({
-    youtube: { configured: youtube.isConfigured(), connected: youtube.isConnected() },
+    youtube: { configured: youtube.isConfigured(), connected: youtube.isConnected(), error: youtube.connectionError() },
     instagram: {
       configured: instagram.isConfigured(),
       connected: instagram.isConnected(),
@@ -363,6 +363,19 @@ const server = app.listen(PORT, () => {
     })
     .catch(() => {});
   startScheduler();
+
+  // A YouTube refresh token can die quietly (revoked, or the 7-day limit on
+  // "Testing" Cloud projects). Probe it now and once a day so the UI says
+  // "reconnect" before a scheduled post finds out the hard way.
+  const probeYouTube = () =>
+    youtube
+      .checkConnection()
+      .then((r) => {
+        if (!r.ok && r.reason !== 'not connected') console.warn(`[youtube] ${r.reason}`);
+      })
+      .catch((err) => console.warn('[youtube] token check failed:', err.message || err));
+  probeYouTube();
+  setInterval(probeYouTube, 24 * 60 * 60 * 1000).unref();
 
   // Sweep leftovers from interrupted uploads at boot, then once an hour.
   const sweep = () => {

@@ -46,8 +46,12 @@ async function loadStatus() {
     ytState.textContent = 'not configured (set YT_CLIENT_ID / YT_CLIENT_SECRET in .env)';
     ytBtn.hidden = true;
   } else if (!status.youtube.connected) {
-    ytDot.className = 'dot warn';
-    ytState.textContent = 'not connected';
+    // A refresh token Google has rejected: the row goes red and the button
+    // says reconnect, with the full reason in the hint below.
+    const dead = Boolean(status.youtube.error);
+    ytDot.className = dead ? 'dot err' : 'dot warn';
+    ytState.textContent = dead ? 'access expired or revoked' : 'not connected';
+    ytBtn.textContent = dead ? 'Reconnect YouTube' : 'Connect YouTube';
     ytBtn.hidden = false;
   } else {
     ytDot.className = 'dot ok';
@@ -107,7 +111,10 @@ async function loadStatus() {
   }
 
   const hint = $('#conn-hint');
-  if (status.instagram.configured && !status.publicBaseUrl) {
+  if (status.youtube.error) {
+    hint.hidden = false;
+    hint.textContent = status.youtube.error;
+  } else if (status.instagram.configured && !status.publicBaseUrl) {
     hint.hidden = false;
     hint.textContent = 'PUBLIC_BASE_URL is not set — Instagram cannot fetch your media without a public tunnel URL.';
   } else if (!status.youtube.configured || !status.instagram.configured) {
