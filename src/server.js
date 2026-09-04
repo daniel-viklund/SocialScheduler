@@ -49,6 +49,8 @@ const sendIndex = (req, res) => {
 };
 app.get('/', sendIndex);
 app.get('/index.html', sendIndex);
+// The Google OAuth consent screen links here as the app's privacy policy.
+app.get('/privacy', (req, res) => res.sendFile(path.join(ROOT, 'public', 'privacy.html')));
 
 app.use(express.static(path.join(ROOT, 'public')));
 app.use('/media', express.static(UPLOADS_DIR));
