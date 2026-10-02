@@ -7,8 +7,6 @@ publish time — a background scheduler uploads it automatically when the time c
 - **YouTube** — YouTube Data API v3 with OAuth (one-click "Connect YouTube" in the UI)
 - **Instagram** — Meta Graph API content publishing (Reels for videos, feed posts for images)
 - Express + SQLite + node-cron, no build step
-- **Reschedule all** — spread every pending post for a platform over a weekly
-  cadence (e.g. 3× per week on Mon/Wed/Fri at 18:00), with a preview before applying
 
 ## Quick start
 
@@ -30,6 +28,8 @@ was stopped are published as soon as it starts again.
 4. **APIs & Services → Credentials → Create credentials → OAuth client ID** →
    type **Web application** → add redirect URI `http://localhost:3000/auth/youtube/callback`.
 5. Put the client ID/secret in `.env` as `YT_CLIENT_ID` / `YT_CLIENT_SECRET`.
+6. Start the app and click **Connect YouTube** — the refresh token is stored locally
+   and uploads work from then on.
 7. **OAuth consent screen → Publishing status → Publish app.** While the app is in
    **Testing**, Google expires every refresh token after 7 days; each YouTube upload
    then fails with `invalid_grant` until you click **Connect YouTube** again. Once the
@@ -44,8 +44,6 @@ The app asks Google for a fresh access token at boot and once a day. If the refr
 token has died, the YouTube row turns red with a **Reconnect YouTube** button and the
 reason, and any upload that comes due fails with that same message rather than a bare
 `invalid_grant`.
-6. Start the app and click **Connect YouTube** — the refresh token is stored locally
-   and uploads work from then on.
 
 > Note: while your Google Cloud app is in "testing" mode, videos uploaded via the API
 > are locked to **private** until the app passes Google's audit. For personal use,
@@ -108,26 +106,40 @@ To check an export before uploading it:
 npm run check:video -- ride.mp4
 ```
 
-## Deploying to the Pi
+## Deploying to Debian
 
-`./scripts/deploy.sh` (or `npm run deploy`) pushes the current commit from your Mac to
-the Pi over ssh. The Pi has no git checkout and this repo is private, so the script
-mirrors the committed tree with rsync rather than pulling from GitHub:
+The production app lives in `/home/user/socialscheduler` on `ssh debian` and runs
+with Docker Compose. Node and ffmpeg are included in the image. The container runs
+as UID 1000, so `data/` must be writable by that user. Settings come from `.env`;
+the database, account tokens, and uploaded media persist in the mounted `data/` directory.
+Docker restarts the app after a server reboot.
+
+In the personal Cloudflare tunnel, route `scheduler.example.com` to
+**HTTP → `127.0.0.1:3000`**. The port binds only to Debian's loopback interface.
+Keep `PUBLIC_BASE_URL=https://scheduler.example.com` in `.env`.
 
 ```bash
-./scripts/deploy.sh            # deploy HEAD, restart the service, health-check it
-./scripts/deploy.sh --dry-run  # show what would change, touch nothing
+ssh debian 'cd ~/socialscheduler && docker compose ps'
+ssh debian 'cd ~/socialscheduler && docker compose logs --tail=50'
+ssh debian 'cd ~/socialscheduler && docker compose restart app'
 ```
 
-It refuses to run on a dirty working tree, tars the current source into
-`~/socialscheduler-backups/` first (keeping the last 5), re-runs `npm ci --omit=dev`
-only when `package-lock.json` changed, restarts the systemd unit, then waits for
-`/api/status` to answer — dumping the journal and failing loudly if it doesn't.
-`data/`, `.env` and `node_modules/` on the Pi are never touched.
+Commit the deployment files before using `npm run deploy`. It deploys the committed
+tree from your Mac using rsync, builds the image, starts the container, and checks
+`/api/status`. It refuses a dirty working tree by default. It backs up the source
+and `.env` to `~/socialscheduler-backups/` (keeping five backups); these are not
+database or media backups. Remote `data/`, `.env`, and `node_modules/` are preserved.
 
-Host, directory, service name and port come from `SS_HOST` / `SS_DIR` / `SS_SERVICE` /
-`SS_PORT` (defaults: `srv-soundtarget.local`, `~/socialscheduler`, `socialscheduler`,
-and the `PORT` from the Pi's `.env`).
+```bash
+./scripts/deploy.sh            # deploy HEAD to Debian and health-check it
+./scripts/deploy.sh --dry-run  # show file changes without deploying
+```
+
+Override `SS_HOST`, `SS_DIR`, or `SS_PORT` if needed (defaults: `debian`,
+`socialscheduler` relative to the remote home directory, and `3000`). The old
+systemd deployment remains available with `SS_MODE=systemd`, `SS_HOST`, and
+`SS_SERVICE`; avoid starting the Pi copy while Debian is running because both
+copies would publish scheduled posts.
 
 ## How it works
 

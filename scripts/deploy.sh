@@ -1,20 +1,20 @@
 #!/usr/bin/env bash
 #
-# Deploy this repo to the Pi from your Mac.
+# Deploy this repo to Debian from your Mac.
 #
 #   ./scripts/deploy.sh              deploy the current commit
 #   ./scripts/deploy.sh --dry-run    show what would change, touch nothing
 #   ./scripts/deploy.sh --allow-dirty  deploy with uncommitted changes present
 #
-# The Pi has no git checkout (and this repo is private, so a `git pull` there
-# would need credentials), so we mirror the committed tree over ssh instead.
-# data/, .env and node_modules/ live only on the Pi and are never touched.
+# Mirror the committed tree over ssh; no GitHub credentials are needed remotely.
+# data/, .env and node_modules/ on the server are never touched.
 #
 # Override any of these from the environment:
-SS_HOST="${SS_HOST:-srv-soundtarget.local}"
+SS_HOST="${SS_HOST:-debian}"
 SS_DIR="${SS_DIR:-socialscheduler}"          # relative to the remote home dir
 SS_SERVICE="${SS_SERVICE:-socialscheduler}"
 SS_KEEP_BACKUPS="${SS_KEEP_BACKUPS:-5}"
+SS_MODE="${SS_MODE:-compose}"               # compose or systemd
 
 set -euo pipefail
 
@@ -27,8 +27,8 @@ for arg in "$@"; do
     -h|--help)
       sed -n '3,11p' "$0" | sed 's/^# \{0,1\}//'
       printf 'Environment overrides (current values):\n'
-      printf '  SS_HOST=%s\n  SS_DIR=%s\n  SS_SERVICE=%s\n  SS_PORT=%s\n  SS_KEEP_BACKUPS=%s\n' \
-        "$SS_HOST" "$SS_DIR" "$SS_SERVICE" "${SS_PORT:-<read from remote .env>}" "$SS_KEEP_BACKUPS"
+      printf '  SS_HOST=%s\n  SS_DIR=%s\n  SS_SERVICE=%s\n  SS_PORT=%s\n  SS_KEEP_BACKUPS=%s\n  SS_MODE=%s\n' \
+        "$SS_HOST" "$SS_DIR" "$SS_SERVICE" "${SS_PORT:-<3000 for compose; remote .env for systemd>}" "$SS_KEEP_BACKUPS" "$SS_MODE"
       exit 0 ;;
     *) echo "unknown option: $arg (try --help)" >&2; exit 2 ;;
   esac
@@ -38,9 +38,18 @@ cd "$(dirname "$0")/.."
 say() { printf '\n\033[1m==> %s\033[0m\n' "$*"; }
 die() { printf '\033[31merror: %s\033[0m\n' "$*" >&2; exit 1; }
 
+case "$SS_MODE" in
+  compose|systemd) ;;
+  *) die "SS_MODE must be compose or systemd" ;;
+esac
+
 # ---------------------------------------------------------------- preflight
 
 git rev-parse --git-dir >/dev/null 2>&1 || die "not a git repository"
+if [ "$SS_MODE" = compose ]; then
+  git cat-file -e HEAD:compose.yaml 2>/dev/null \
+    || die "commit the Docker deployment files before deploying the committed tree"
+fi
 
 if [ -z "$ALLOW_DIRTY" ] && [ -n "$(git status --porcelain)" ]; then
   git status --short
@@ -50,8 +59,8 @@ fi
 REV="$(git rev-parse --short HEAD)"
 SUBJECT="$(git log -1 --format=%s)"
 
-# Not fatal: the Pi gets the tree over ssh, not from GitHub. But an unpushed
-# commit means the Pi would be running something no one else can recover.
+# Not fatal: the server gets the tree over ssh, not from GitHub. But an unpushed
+# commit means the server would be running something no one else can recover.
 if git rev-parse --abbrev-ref '@{upstream}' >/dev/null 2>&1; then
   AHEAD="$(git rev-list --count '@{upstream}'..HEAD)"
   [ "$AHEAD" -gt 0 ] && echo "note: $AHEAD commit(s) not pushed to $(git rev-parse --abbrev-ref '@{upstream}')"
@@ -63,7 +72,11 @@ ssh -o ConnectTimeout=8 "$SS_HOST" "test -d ~/$SS_DIR" \
   || die "~/$SS_DIR does not exist on $SS_HOST"
 
 # The health check needs the port the service actually listens on.
-PORT="${SS_PORT:-$(ssh "$SS_HOST" "grep -sE '^PORT=[0-9]+' ~/$SS_DIR/.env | cut -d= -f2" || true)}"
+if [ "$SS_MODE" = compose ]; then
+  PORT="${SS_PORT:-3000}"
+else
+  PORT="${SS_PORT:-$(ssh "$SS_HOST" "grep -sE '^PORT=[0-9]+' ~/$SS_DIR/.env | cut -d= -f2" || true)}"
+fi
 PORT="${PORT:-3000}"
 
 # --------------------------------------------------------- stage the commit
@@ -102,17 +115,22 @@ fi
 
 # ------------------------------------------------------------ deps + restart
 
-LOCK_AFTER="$(ssh "$SS_HOST" "md5sum ~/$SS_DIR/package-lock.json | cut -d' ' -f1")"
-if [ "$LOCK_BEFORE" != "$LOCK_AFTER" ]; then
-  # better-sqlite3 builds from source here, so this is minutes, not seconds.
-  say "package-lock.json changed — installing dependencies (this is slow on a Pi)"
-  ssh "$SS_HOST" "cd ~/$SS_DIR && npm ci --omit=dev"
+if [ "$SS_MODE" = compose ]; then
+  say "Building and starting the Debian container"
+  ssh "$SS_HOST" "cd ~/$SS_DIR && docker compose up -d --build"
 else
-  echo "dependencies unchanged — skipping npm ci"
-fi
+  LOCK_AFTER="$(ssh "$SS_HOST" "md5sum ~/$SS_DIR/package-lock.json | cut -d' ' -f1")"
+  if [ "$LOCK_BEFORE" != "$LOCK_AFTER" ]; then
+    # better-sqlite3 builds from source here, so this is minutes, not seconds.
+    say "package-lock.json changed — installing dependencies (this is slow on a Pi)"
+    ssh "$SS_HOST" "cd ~/$SS_DIR && npm ci --omit=dev"
+  else
+    echo "dependencies unchanged — skipping npm ci"
+  fi
 
-say "Restarting $SS_SERVICE"
-ssh "$SS_HOST" "sudo systemctl restart $SS_SERVICE"
+  say "Restarting $SS_SERVICE"
+  ssh "$SS_HOST" "sudo systemctl restart $SS_SERVICE"
+fi
 
 say "Waiting for it to come back"
 ssh "$SS_HOST" "
@@ -123,19 +141,26 @@ ssh "$SS_HOST" "
     sleep 1
   done
   echo 'no response on port $PORT after 20s' >&2
-  systemctl is-active $SS_SERVICE >&2
   exit 1
 " || {
   echo
   echo "--- last 30 log lines ---"
-  ssh "$SS_HOST" "sudo journalctl -u $SS_SERVICE -n 30 --no-pager"
+  if [ "$SS_MODE" = compose ]; then
+    ssh "$SS_HOST" "cd ~/$SS_DIR && docker compose logs --tail=30"
+  else
+    ssh "$SS_HOST" "sudo journalctl -u $SS_SERVICE -n 30 --no-pager"
+  fi
   die "deploy finished but the service is not healthy — roll back with: git checkout <previous-sha> && ./scripts/deploy.sh"
 }
 
 # ---------------------------------------------------------------- report
 
 say "Recent log"
-ssh "$SS_HOST" "sudo journalctl -u $SS_SERVICE -n 15 --no-pager -o cat"
+if [ "$SS_MODE" = compose ]; then
+  ssh "$SS_HOST" "cd ~/$SS_DIR && docker compose logs --tail=15"
+else
+  ssh "$SS_HOST" "sudo journalctl -u $SS_SERVICE -n 15 --no-pager -o cat"
+fi
 
 say "Disk"
 ssh "$SS_HOST" "curl -fsS http://localhost:$PORT/api/status" | node -e "
