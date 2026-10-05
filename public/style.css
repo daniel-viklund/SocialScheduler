@@ -221,7 +221,7 @@ a.post-result { color: var(--accent); }
 }
 .resched .row > label { min-width: 150px; }
 .resched-days { margin-bottom: 14px; }
-.resched .day-pick {
+.day-pick {
   display: inline-flex;
   align-items: center;
   gap: 6px;
@@ -229,7 +229,7 @@ a.post-result { color: var(--accent); }
   color: var(--text);
   font-size: 14px;
 }
-.resched .day-pick input { accent-color: var(--accent); margin: 0; }
+.day-pick input { accent-color: var(--accent); margin: 0; }
 .resched-order { max-width: 240px; }
 /* sits beside the Order select, so line it up with the control not the label */
 .resched [data-reshuffle] { align-self: flex-end; margin-bottom: 20px; }
@@ -249,3 +249,12 @@ a.post-result { color: var(--accent); }
 .resched-when b { color: var(--text); font-weight: 600; }
 .resched .post-actions { margin-top: 12px; }
 .resched .form-msg { margin: 0; }
+
+/* Posting schedule settings and the next-slot confirmation. */
+#posting-settings > summary { cursor: pointer; font-weight: 600; }
+#posting-schedule-form { margin-top: 16px; }
+.posting-platform { margin-bottom: 16px; }
+.posting-days { margin-bottom: 12px; }
+.slot-preview { border: 1px solid var(--border); border-radius: 8px; padding: 12px; margin-bottom: 16px; }
+.slot-preview p { margin: 0 0 10px; }
+.slot-preview .btn { margin: 0 6px 4px 0; }

@@ -7,6 +7,7 @@ import express from 'express';
 import multer from 'multer';
 import {
   DATA_DIR, UPLOADS_DIR, EDITABLE_STATUSES,
+  getPostingSchedule, savePostingSchedule, getNextSlot, createPostInNextSlot,
   createPost, listPosts, getPost, updatePost, deletePost, retryPost, usedFileNames, bulkReschedule,
 } from './db.js';
 import * as youtube from './youtube.js';
@@ -19,7 +20,7 @@ const PORT = process.env.PORT || 3000;
 // Raw camera files and long 4K exports run well past the old 2 GB cap.
 const MAX_UPLOAD_BYTES = Number(process.env.MAX_UPLOAD_GB || 16) * 1024 ** 3;
 
-const app = express();
+export const app = express();
 app.use(express.json());
 
 // Cloudflare rewrites our `max-age=0` into a 4-hour *browser* TTL for .js/.css,
@@ -180,6 +181,25 @@ function withFile(post) {
   }
 }
 
+app.get('/api/settings/posting-schedule', (req, res) => {
+  res.set('Cache-Control', 'no-store').json(getPostingSchedule());
+});
+
+app.put('/api/settings/posting-schedule', (req, res) => {
+  try {
+    res.json(savePostingSchedule(req.body));
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+app.get('/api/next-slot', (req, res) => {
+  if (!['youtube', 'instagram'].includes(req.query.platform)) {
+    return res.status(400).json({ error: 'Choose youtube or instagram' });
+  }
+  res.set('Cache-Control', 'no-store').json(getNextSlot(req.query.platform));
+});
+
 app.get('/api/posts', (req, res) => {
   res.json(listPosts().map(withFile));
 });
@@ -191,7 +211,7 @@ app.post('/api/posts', upload.single('file'), async (req, res) => {
     res.status(code).json({ error });
   };
   try {
-    const { title, description = '', scheduledAt } = req.body;
+    const { title, description = '', scheduledAt, scheduleMode = 'manual' } = req.body;
     const platforms = [].concat(req.body.platforms || []);
 
     if (!req.file) return reject(400, 'A video or image file is required');
@@ -201,6 +221,9 @@ app.post('/api/posts', upload.single('file'), async (req, res) => {
     const valid = ['youtube', 'instagram'];
     if (platforms.length === 0 || platforms.some((p) => !valid.includes(p))) {
       return reject(400, 'Pick at least one platform (youtube, instagram)');
+    }
+    if (!['next', 'manual'].includes(scheduleMode) || (scheduleMode === 'next' && platforms.length !== 1)) {
+      return reject(400, 'Next available scheduling requires exactly one platform');
     }
     // Instagram posts carry a caption and nothing else; only YouTube needs a
     // title, and it refuses an empty one.
@@ -223,7 +246,7 @@ app.post('/api/posts', upload.single('file'), async (req, res) => {
       }
     }
 
-    const post = createPost({
+    const post = (scheduleMode === 'next' ? createPostInNextSlot : createPost)({
       title: (title || '').trim(),
       description,
       fileName: req.file.filename,
@@ -234,7 +257,7 @@ app.post('/api/posts', upload.single('file'), async (req, res) => {
     });
     res.status(201).json({ ...withFile(post), warnings });
   } catch (err) {
-    reject(500, String(err.message || err));
+    reject(err.status || 500, String(err.message || err));
   }
 });
 
@@ -355,46 +378,52 @@ app.use((err, req, res, next) => {
   res.status(400).json({ error: String(err.message || err) });
 });
 
-const server = app.listen(PORT, () => {
-  console.log(`Social Scheduler running at http://localhost:${PORT}`);
-  instagram
-    .refreshTokenIfNeeded()
-    .then((r) => {
-      if (r.refreshed) console.log('[instagram] access token refreshed, ~60 days remaining');
-      else if (r.error) console.warn(`[instagram] token refresh failed: ${r.error}`);
-    })
-    .catch(() => {});
-  startScheduler();
-
-  // A YouTube refresh token can die quietly (revoked, or the 7-day limit on
-  // "Testing" Cloud projects). Probe it now and once a day so the UI says
-  // "reconnect" before a scheduled post finds out the hard way.
-  const probeYouTube = () =>
-    youtube
-      .checkConnection()
+export function startServer() {
+  const server = app.listen(PORT, () => {
+    console.log(`Social Scheduler running at http://localhost:${PORT}`);
+    instagram
+      .refreshTokenIfNeeded()
       .then((r) => {
-        if (!r.ok && r.reason !== 'not connected') console.warn(`[youtube] ${r.reason}`);
+        if (r.refreshed) console.log('[instagram] access token refreshed, ~60 days remaining');
+        else if (r.error) console.warn(`[instagram] token refresh failed: ${r.error}`);
       })
-      .catch((err) => console.warn('[youtube] token check failed:', err.message || err));
-  probeYouTube();
-  setInterval(probeYouTube, 24 * 60 * 60 * 1000).unref();
+      .catch(() => {});
+    startScheduler();
 
-  // Sweep leftovers from interrupted uploads at boot, then once an hour.
-  const sweep = () => {
-    try {
-      const { count, bytes } = sweepOrphans();
-      if (count > 0) console.log(`[cleanup] freed ${(bytes / 1024 ** 3).toFixed(2)} GB from ${count} orphaned file(s)`);
-    } catch (err) {
-      console.warn('[cleanup] sweep failed:', err.message || err);
-    }
-  };
-  sweep();
-  setInterval(sweep, 60 * 60 * 1000).unref();
-});
+    // A YouTube refresh token can die quietly (revoked, or the 7-day limit on
+    // "Testing" Cloud projects). Probe it now and once a day so the UI says
+    // "reconnect" before a scheduled post finds out the hard way.
+    const probeYouTube = () =>
+      youtube
+        .checkConnection()
+        .then((r) => {
+          if (!r.ok && r.reason !== 'not connected') console.warn(`[youtube] ${r.reason}`);
+        })
+        .catch((err) => console.warn('[youtube] token check failed:', err.message || err));
+    probeYouTube();
+    setInterval(probeYouTube, 24 * 60 * 60 * 1000).unref();
 
-// Node's default requestTimeout is 5 minutes, which aborts a multi-GB upload
-// mid-stream and answers 408. Uploads here are slow by nature: disable it and
-// rely on the socket dying instead.
-server.requestTimeout = 0;
-server.headersTimeout = 0;
-server.timeout = 0;
+    // Sweep leftovers from interrupted uploads at boot, then once an hour.
+    const sweep = () => {
+      try {
+        const { count, bytes } = sweepOrphans();
+        if (count > 0) console.log(`[cleanup] freed ${(bytes / 1024 ** 3).toFixed(2)} GB from ${count} orphaned file(s)`);
+      } catch (err) {
+        console.warn('[cleanup] sweep failed:', err.message || err);
+      }
+    };
+    sweep();
+    setInterval(sweep, 60 * 60 * 1000).unref();
+  });
+
+  // Node's default requestTimeout is 5 minutes, which aborts a multi-GB upload
+  // mid-stream and answers 408. Uploads here are slow by nature: disable it and
+  // rely on the socket dying instead.
+  server.requestTimeout = 0;
+  server.headersTimeout = 0;
+  server.timeout = 0;
+
+  return server;
+}
+
+if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) startServer();

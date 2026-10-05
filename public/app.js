@@ -168,7 +168,7 @@ function applyPlatformFields() {
 platformSelect.addEventListener('change', applyPlatformFields);
 applyPlatformFields();
 
-// Default the schedule field to one hour from now.
+// Keep a convenient starting value for the manual date picker.
 const inOneHour = new Date(Date.now() + 60 * 60 * 1000);
 inOneHour.setSeconds(0, 0);
 form.scheduledAt.value = toLocalInput(inOneHour);
@@ -177,6 +177,7 @@ form.addEventListener('submit', async (e) => {
   e.preventDefault();
   msg.hidden = true;
 
+  if (form.scheduleMode.value === 'next' && !suggestedSlot) return showMsg('Wait for an available slot, or choose a specific date and time.', true);
   const platforms = [platformSelect.value];
   if (PLATFORM_FIELDS[platformSelect.value].title && !form.title.value.trim()) {
     return showMsg('Title is required for YouTube', true);
@@ -203,16 +204,19 @@ form.addEventListener('submit', async (e) => {
   fd.append('file', form.file.files[0]);
   fd.append('title', form.title.value);
   fd.append('description', form.description.value);
-  fd.append('scheduledAt', new Date(form.scheduledAt.value).toISOString());
+  fd.append('scheduleMode', form.scheduleMode.value);
+  fd.append('scheduledAt', form.scheduleMode.value === 'next' ? suggestedSlot.scheduledAt : new Date(form.scheduledAt.value).toISOString());
   for (const p of platforms) fd.append('platforms', p);
 
   const btn = $('#submit-btn');
+  uploading = true;
   btn.disabled = true;
+  for (const field of form.querySelectorAll('input, textarea, select')) field.disabled = true;
   btn.textContent = 'Uploading…';
   try {
     const created = await uploadWithProgress(fd);
     const notes = created.warnings?.length ? ` — ${created.warnings.join(' · ')}` : '';
-    showMsg(`Scheduled ✔${notes}`, false);
+    showMsg(`Scheduled for ${new Date(created.scheduled_at).toLocaleString()} ✔${notes}`, false);
     form.file.value = '';
     form.title.value = '';
     form.description.value = '';
@@ -221,8 +225,11 @@ form.addEventListener('submit', async (e) => {
   } catch (err) {
     showMsg(err.message, true);
   } finally {
-    btn.disabled = false;
+    uploading = false;
+    for (const field of form.querySelectorAll('input, textarea, select')) field.disabled = false;
     btn.textContent = 'Schedule';
+    applyScheduleMode();
+    await refreshNextSlot();
     $('#upload-progress').hidden = true;
   }
 });
@@ -380,6 +387,7 @@ let editingKey = null;
 async function loadPosts() {
   lastPosts = await api('/api/posts');
   renderPosts();
+  if (!uploading) await refreshNextSlot();
 }
 
 function renderPosts() {
@@ -859,10 +867,140 @@ function initResched(platform) {
   reschedUI[platform] = { update };
 }
 
+/* ---------- posting schedule settings and suggestions ---------- */
+
+let suggestedSlot = null;
+let slotRequest = 0;
+let uploading = false;
+
+function updateScheduleButton() {
+  $('#submit-btn').disabled = uploading || (form.scheduleMode.value === 'next' && !suggestedSlot);
+}
+
+function applyScheduleMode() {
+  const manual = form.scheduleMode.value === 'manual';
+  $('#manual-schedule').hidden = !manual;
+  $('#next-slot-panel').hidden = manual;
+  form.scheduledAt.disabled = !manual || uploading;
+  form.scheduledAt.required = manual;
+  updateScheduleButton();
+}
+
+async function refreshNextSlot() {
+  if (uploading) return;
+  const request = ++slotRequest;
+  suggestedSlot = null;
+  updateScheduleButton();
+  $('#next-slot').textContent = 'Finding next available slot…';
+  try {
+    const slot = await api(`/api/next-slot?platform=${encodeURIComponent(platformSelect.value)}`);
+    if (request !== slotRequest || uploading) return;
+    suggestedSlot = slot;
+    const when = new Date(slot.scheduledAt).toLocaleString(undefined, {
+      timeZone: slot.timezone, weekday: 'long', year: 'numeric', month: 'long', day: 'numeric',
+      hour: '2-digit', minute: '2-digit',
+    });
+    $('#next-slot').textContent = `Next available: ${when} (${slot.timezone})`;
+  } catch (err) {
+    if (request !== slotRequest || uploading) return;
+    $('#next-slot').textContent = `Could not find a slot: ${err.message}. Retry or pick a specific date and time.`;
+  }
+  updateScheduleButton();
+}
+
+form.scheduleMode.addEventListener('change', () => {
+  applyScheduleMode();
+  refreshNextSlot();
+});
+platformSelect.addEventListener('change', refreshNextSlot);
+$('#refresh-slot').addEventListener('click', refreshNextSlot);
+$('#configure-schedule').addEventListener('click', () => {
+  $('#posting-settings').open = true;
+  $('#settings').scrollIntoView({ behavior: 'smooth' });
+});
+$('#manual-timezone').textContent = `Your browser timezone: ${Intl.DateTimeFormat().resolvedOptions().timeZone}`;
+applyScheduleMode();
+
+async function loadPostingSchedule() {
+  const message = $('#settings-msg');
+  try {
+    const schedule = await api('/api/settings/posting-schedule');
+    const fields = $('#posting-schedule-fields');
+    fields.innerHTML = '';
+    for (const { key, label } of PLATFORMS) {
+      const spec = schedule[key];
+      const group = document.createElement('fieldset');
+      group.className = 'posting-platform';
+      group.dataset.platform = key;
+      group.innerHTML = `
+        <legend>${label}</legend>
+        <div class="posting-days">
+          ${DAY_ORDER.map((day) => `<label class="day-pick"><input type="checkbox" value="${day}" />${DAY_NAMES[day]}</label>`).join('')}
+        </div>
+        <div class="row">
+          <label>Post at<input type="time" name="time" required /></label>
+          <label>Timezone<input type="text" name="timezone" list="posting-timezones" placeholder="Europe/Stockholm" required /></label>
+        </div>`;
+      group.querySelectorAll('input[type="checkbox"]').forEach((box) => { box.checked = spec.days.includes(Number(box.value)); });
+      group.querySelector('[name="time"]').value = spec.time;
+      group.querySelector('[name="timezone"]').value = spec.timezone;
+      fields.appendChild(group);
+    }
+    const zones = document.createElement('datalist');
+    zones.id = 'posting-timezones';
+    const availableZones = typeof Intl.supportedValuesOf === 'function'
+      ? Intl.supportedValuesOf('timeZone') : ['Europe/Stockholm', 'UTC'];
+    for (const zone of new Set(['UTC', ...availableZones])) {
+      const option = document.createElement('option');
+      option.value = zone;
+      zones.appendChild(option);
+    }
+    fields.appendChild(zones);
+    $('#save-schedule').disabled = false;
+  } catch (err) {
+    $('#posting-settings').open = true;
+    message.hidden = false;
+    message.className = 'form-msg err';
+    message.textContent = `Could not load posting settings: ${err.message}. Reload to try again.`;
+  }
+}
+
+$('#posting-schedule-form').addEventListener('submit', async (event) => {
+  event.preventDefault();
+  const message = $('#settings-msg');
+  const button = $('#save-schedule');
+  message.hidden = true;
+  const schedule = {};
+  for (const group of document.querySelectorAll('.posting-platform')) {
+    schedule[group.dataset.platform] = {
+      days: [...group.querySelectorAll('input[type="checkbox"]:checked')].map((box) => Number(box.value)),
+      time: group.querySelector('[name="time"]').value,
+      timezone: group.querySelector('[name="timezone"]').value.trim(),
+    };
+  }
+  button.disabled = true;
+  try {
+    await api('/api/settings/posting-schedule', {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(schedule),
+    });
+    message.className = 'form-msg ok';
+    message.textContent = 'Posting schedule saved. Existing posts keep their dates.';
+    await refreshNextSlot();
+  } catch (err) {
+    message.className = 'form-msg err';
+    message.textContent = err.message;
+  } finally {
+    message.hidden = false;
+    button.disabled = false;
+  }
+});
+
 /* ---------- boot ---------- */
 
 renderFilterChips();
 for (const { key } of PLATFORMS) initResched(key);
+loadPostingSchedule();
+refreshNextSlot();
 loadStatus().catch(console.error);
 loadPosts().catch(console.error);
 setInterval(() => {

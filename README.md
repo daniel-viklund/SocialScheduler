@@ -1,8 +1,8 @@
 # Social Scheduler
 
 A small self-hosted web app for scheduling uploads to **YouTube** and **Instagram**.
-Pick a video (or image, for Instagram), pick the platform, write the text, choose a
-publish time — a background scheduler uploads it automatically when the time comes.
+Pick a video (or image, for Instagram), pick the platform, write the text, confirm the
+next available posting slot (or choose a specific date and time) — a background scheduler uploads it automatically when the time comes.
 
 - **YouTube** — YouTube Data API v3 with OAuth (one-click "Connect YouTube" in the UI)
 - **Instagram** — Meta Graph API content publishing (Reels for videos, feed posts for images)
@@ -18,6 +18,28 @@ npm start              # http://localhost:3000
 
 The scheduler checks every minute for due posts. Posts that came due while the app
 was stopped are published as soon as it starts again.
+
+## Posting schedule
+
+Open **Settings · Posting schedule** on the website to choose weekdays, a posting
+time, and timezone separately for each platform. Defaults are YouTube on Fridays
+and Instagram on Mondays and Fridays, both at 18:00 Europe/Stockholm. Settings are
+saved in SQLite and shared across browsers.
+
+New posts default to **Next available slot**. Suggestions search forward from now,
+fill gaps, and skip existing bookings on that platform, including manual bookings
+and posts created before the latest settings change. A booking occupies its minute;
+a post at another time on the same day does not consume the recurring slot.
+Changing settings never moves existing posts. **Pick a specific date and time**
+keeps manual scheduling available, using the browser timezone displayed below it.
+
+Recurring times follow the configured timezone through daylight saving changes.
+A nonexistent spring-forward time is skipped; a repeated autumn time uses its first
+occurrence only. The server checks availability again after an upload; if the
+suggested slot changed, review the updated suggestion and submit again.
+
+Run `npm test` for scheduling and API tests. Tests use a temporary data directory
+and do not start the publisher or change existing posts.
 
 ## YouTube setup
 

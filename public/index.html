@@ -45,6 +45,18 @@
       </div>
     </section>
 
+    <section class="card" id="settings">
+      <details id="posting-settings">
+        <summary>Settings · Posting schedule</summary>
+        <p class="hint">Choose posting days, a time, and timezone for each platform. Changes apply to new suggestions; existing posts keep their dates.</p>
+        <form id="posting-schedule-form">
+          <div id="posting-schedule-fields"></div>
+          <button type="submit" class="btn small primary" id="save-schedule" disabled>Save posting schedule</button>
+          <p class="form-msg" id="settings-msg" role="status" hidden></p>
+        </form>
+      </details>
+    </section>
+
     <section class="card">
       <h2>New scheduled post</h2>
       <form id="post-form">
@@ -62,10 +74,6 @@
         </label>
         <div class="row">
           <label>
-            Publish at
-            <input type="datetime-local" name="scheduledAt" required />
-          </label>
-          <label>
             Platform
             <select name="platform" id="platform-select">
               <option value="youtube">YouTube</option>
@@ -73,7 +81,24 @@
             </select>
           </label>
         </div>
-        <button type="submit" class="btn primary" id="submit-btn">Schedule</button>
+        <label>
+          Scheduling
+          <select name="scheduleMode" id="schedule-mode">
+            <option value="next">Next available slot</option>
+            <option value="manual">Pick a specific date and time</option>
+          </select>
+        </label>
+        <div id="next-slot-panel" class="slot-preview">
+          <p id="next-slot" role="status">Finding next available slot…</p>
+          <button type="button" class="btn small" id="refresh-slot">Refresh suggestion</button>
+          <button type="button" class="btn small" id="configure-schedule">Edit posting schedule</button>
+        </div>
+        <label id="manual-schedule" hidden>
+          Publish at
+          <input type="datetime-local" name="scheduledAt" disabled />
+          <span class="hint" id="manual-timezone"></span>
+        </label>
+        <button type="submit" class="btn primary" id="submit-btn" disabled>Schedule</button>
         <div class="upload-progress" id="upload-progress" hidden>
           <div class="bar"><div class="bar-fill" id="upload-bar"></div></div>
           <p class="hint" id="upload-detail"></p>

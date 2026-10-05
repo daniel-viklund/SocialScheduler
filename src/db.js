@@ -1,10 +1,11 @@
 import Database from 'better-sqlite3';
+import { DEFAULT_POSTING_SCHEDULE, validatePostingSchedule, nextAvailableSlot } from './posting-schedule.js';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-export const DATA_DIR = path.join(ROOT, 'data');
+export const DATA_DIR = process.env.SCHEDULER_DATA_DIR || path.join(ROOT, 'data');
 export const UPLOADS_DIR = path.join(DATA_DIR, 'uploads');
 fs.mkdirSync(UPLOADS_DIR, { recursive: true });
 
@@ -169,4 +170,39 @@ export function setSetting(key, value) {
 
 export function deleteSetting(key) {
   db.prepare(`DELETE FROM settings WHERE key = ?`).run(key);
+}
+
+export function getPostingSchedule() {
+  const saved = getSetting('posting_schedule');
+  return saved ? JSON.parse(saved) : structuredClone(DEFAULT_POSTING_SCHEDULE);
+}
+
+export function savePostingSchedule(value) {
+  const clean = validatePostingSchedule(value);
+  setSetting('posting_schedule', JSON.stringify(clean));
+  return clean;
+}
+
+export function getNextSlot(platform, now = new Date()) {
+  const schedule = getPostingSchedule()[platform];
+  if (!schedule) throw new Error('Choose youtube or instagram');
+  // Include older bookings, manual dates, and failed posts that can be retried.
+  const occupied = db.prepare(`
+    SELECT p.scheduled_at FROM posts p
+    JOIN post_targets t ON t.post_id = p.id
+    WHERE t.platform = ? AND p.scheduled_at > ?
+  `).all(platform, new Date(new Date(now).getTime() - 86400000).toISOString());
+  return { scheduledAt: nextAvailableSlot(schedule, occupied.map((p) => p.scheduled_at), now), ...schedule };
+}
+
+export function createPostInNextSlot(post) {
+  return db.transaction(() => {
+    const next = getNextSlot(post.platforms[0]);
+    if (post.scheduledAt !== next.scheduledAt) {
+      const error = new Error('The suggested slot changed during upload. Review the new suggestion and schedule again.');
+      error.status = 409;
+      throw error;
+    }
+    return createPost(post);
+  }).immediate();
 }
