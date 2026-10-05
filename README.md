@@ -38,6 +38,14 @@ A nonexistent spring-forward time is skipped; a repeated autumn time uses its fi
 occurrence only. The server checks availability again after an upload; if the
 suggested slot changed, review the updated suggestion and submit again.
 
+Pressing **Schedule** adds the file to an upload queue and immediately frees the
+form for the next video. Uploads run one at a time, with separate progress and
+retry controls. Pending queue entries count toward next-slot suggestions in that
+tab. Removing or failing an earlier upload does not move later confirmed slots.
+Keep the tab open until uploads finish; the queue is held in browser memory and
+is not restored after a reload. Retry uses the same upload ID to avoid duplicate
+posts if the server saved an upload but its response was lost.
+
 Run `npm test` for scheduling and API tests. Tests use a temporary data directory
 and do not start the publisher or change existing posts.
 

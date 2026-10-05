@@ -258,3 +258,7 @@ a.post-result { color: var(--accent); }
 .slot-preview { border: 1px solid var(--border); border-radius: 8px; padding: 12px; margin-bottom: 16px; }
 .slot-preview p { margin: 0 0 10px; }
 .slot-preview .btn { margin: 0 6px 4px 0; }
+
+#upload-queue-list { margin-top: 14px; }
+.upload-job strong { overflow-wrap: anywhere; }
+.upload-job .bar { margin-top: 10px; }

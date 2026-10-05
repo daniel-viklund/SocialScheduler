@@ -7,7 +7,7 @@ import express from 'express';
 import multer from 'multer';
 import {
   DATA_DIR, UPLOADS_DIR, EDITABLE_STATUSES,
-  getPostingSchedule, savePostingSchedule, getNextSlot, createPostInNextSlot,
+  getPostByUploadId, getPostingSchedule, savePostingSchedule, getNextSlot, createPostInNextSlot,
   createPost, listPosts, getPost, updatePost, deletePost, retryPost, usedFileNames, bulkReschedule,
 } from './db.js';
 import * as youtube from './youtube.js';
@@ -200,6 +200,16 @@ app.get('/api/next-slot', (req, res) => {
   res.set('Cache-Control', 'no-store').json(getNextSlot(req.query.platform));
 });
 
+// The browser includes slots held by its upload queue in new suggestions.
+app.post('/api/next-slot', (req, res) => {
+  const { platform, heldSlots = [] } = req.body || {};
+  if (!['youtube', 'instagram'].includes(platform) || !Array.isArray(heldSlots) ||
+      heldSlots.length > 500 || heldSlots.some((slot) => typeof slot !== 'string' || Number.isNaN(Date.parse(slot)))) {
+    return res.status(400).json({ error: 'Provide a platform and up to 500 valid queued dates' });
+  }
+  res.set('Cache-Control', 'no-store').json(getNextSlot(platform, new Date(), heldSlots));
+});
+
 app.get('/api/posts', (req, res) => {
   res.json(listPosts().map(withFile));
 });
@@ -211,9 +221,19 @@ app.post('/api/posts', upload.single('file'), async (req, res) => {
     res.status(code).json({ error });
   };
   try {
-    const { title, description = '', scheduledAt, scheduleMode = 'manual' } = req.body;
+    const { title, description = '', scheduledAt, scheduleMode = 'manual', uploadId = null } = req.body;
     const platforms = [].concat(req.body.platforms || []);
 
+    if (uploadId !== null && (typeof uploadId !== 'string' || !/^[a-zA-Z0-9-]{16,80}$/.test(uploadId))) {
+      return reject(400, 'Invalid upload ID');
+    }
+    if (uploadId) {
+      const existing = getPostByUploadId(uploadId);
+      if (existing) {
+        if (req.file) fs.rm(req.file.path, { force: true }, () => {});
+        return res.json({ ...withFile(existing), warnings: [] });
+      }
+    }
     if (!req.file) return reject(400, 'A video or image file is required');
     if (!scheduledAt || Number.isNaN(Date.parse(scheduledAt))) {
       return reject(400, 'A valid schedule time is required');
@@ -254,6 +274,7 @@ app.post('/api/posts', upload.single('file'), async (req, res) => {
       mimeType: req.file.mimetype,
       scheduledAt: new Date(scheduledAt).toISOString(),
       platforms,
+      uploadId,
     });
     res.status(201).json({ ...withFile(post), warnings });
   } catch (err) {

@@ -99,12 +99,14 @@
           <span class="hint" id="manual-timezone"></span>
         </label>
         <button type="submit" class="btn primary" id="submit-btn" disabled>Schedule</button>
-        <div class="upload-progress" id="upload-progress" hidden>
-          <div class="bar"><div class="bar-fill" id="upload-bar"></div></div>
-          <p class="hint" id="upload-detail"></p>
-        </div>
         <p class="form-msg" id="form-msg" hidden></p>
       </form>
+    </section>
+
+    <section class="card" id="upload-queue" hidden>
+      <h2>Upload queue</h2>
+      <p class="hint">Keep this tab open until uploads finish. Files upload one at a time; you can keep scheduling while they upload.</p>
+      <div id="upload-queue-list"></div>
     </section>
 
     <div class="list-filter">

@@ -41,17 +41,28 @@ db.exec(`
   );
 `);
 
+// Upload request IDs make retrying after a lost response safe.
+if (!db.prepare('PRAGMA table_info(posts)').all().some((column) => column.name === 'upload_id')) {
+  db.exec('ALTER TABLE posts ADD COLUMN upload_id TEXT');
+}
+db.exec('CREATE UNIQUE INDEX IF NOT EXISTS posts_upload_id ON posts(upload_id)');
+
+export function getPostByUploadId(uploadId) {
+  const row = db.prepare('SELECT id FROM posts WHERE upload_id = ?').get(uploadId);
+  return row ? getPost(row.id) : null;
+}
+
 const nowIso = () => new Date().toISOString();
 
-export function createPost({ title, description, fileName, originalName, mimeType, scheduledAt, platforms }) {
+export function createPost({ title, description, fileName, originalName, mimeType, scheduledAt, platforms, uploadId = null }) {
   const insertPost = db.prepare(`
-    INSERT INTO posts (title, description, file_name, original_name, mime_type, scheduled_at)
-    VALUES (@title, @description, @fileName, @originalName, @mimeType, @scheduledAt)
+    INSERT INTO posts (title, description, file_name, original_name, mime_type, scheduled_at, upload_id)
+    VALUES (@title, @description, @fileName, @originalName, @mimeType, @scheduledAt, @uploadId)
   `);
   const insertTarget = db.prepare(`INSERT INTO post_targets (post_id, platform) VALUES (?, ?)`);
 
   const tx = db.transaction(() => {
-    const { lastInsertRowid } = insertPost.run({ title, description, fileName, originalName, mimeType, scheduledAt });
+    const { lastInsertRowid } = insertPost.run({ title, description, fileName, originalName, mimeType, scheduledAt, uploadId });
     for (const platform of platforms) insertTarget.run(lastInsertRowid, platform);
     return lastInsertRowid;
   });
@@ -183,7 +194,7 @@ export function savePostingSchedule(value) {
   return clean;
 }
 
-export function getNextSlot(platform, now = new Date()) {
+export function getNextSlot(platform, now = new Date(), heldSlots = []) {
   const schedule = getPostingSchedule()[platform];
   if (!schedule) throw new Error('Choose youtube or instagram');
   // Include older bookings, manual dates, and failed posts that can be retried.
@@ -192,13 +203,15 @@ export function getNextSlot(platform, now = new Date()) {
     JOIN post_targets t ON t.post_id = p.id
     WHERE t.platform = ? AND p.scheduled_at > ?
   `).all(platform, new Date(new Date(now).getTime() - 86400000).toISOString());
-  return { scheduledAt: nextAvailableSlot(schedule, occupied.map((p) => p.scheduled_at), now), ...schedule };
+  return { scheduledAt: nextAvailableSlot(schedule, [...occupied.map((p) => p.scheduled_at), ...heldSlots], now), ...schedule };
 }
 
 export function createPostInNextSlot(post) {
   return db.transaction(() => {
-    const next = getNextSlot(post.platforms[0]);
-    if (post.scheduledAt !== next.scheduledAt) {
+    // A queued upload keeps its confirmed slot even if an earlier upload fails
+    // or is removed. It must still be future, on the cadence, and unoccupied.
+    const next = getNextSlot(post.platforms[0], new Date(Date.parse(post.scheduledAt) - 1));
+    if (Date.parse(post.scheduledAt) <= Date.now() || post.scheduledAt !== next.scheduledAt) {
       const error = new Error('The suggested slot changed during upload. Review the new suggestion and schedule again.');
       error.status = 409;
       throw error;

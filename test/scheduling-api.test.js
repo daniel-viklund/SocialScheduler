@@ -98,3 +98,42 @@ test('settings, booking conflicts, manual scheduling, editing and deletion', asy
   assert.equal((await json(`/api/posts/${toDelete.body.id}`, { method: 'DELETE' })).status, 200);
   assert.equal((await json('/api/next-slot?platform=youtube')).body.scheduledAt, deleteSlot);
 });
+
+test('queued slots stay distinct and later uploads survive an earlier removal', async () => {
+  const first = (await json('/api/next-slot?platform=youtube')).body.scheduledAt;
+  const next = await json('/api/next-slot', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ platform: 'youtube', heldSlots: [first] }),
+  });
+  assert.equal(next.status, 200);
+  assert.notEqual(next.body.scheduledAt, first);
+  // The first file was removed from the browser queue without uploading.
+  const later = await upload(next.body.scheduledAt, 'next');
+  assert.equal(later.status, 201);
+  assert.equal((await json('/api/next-slot?platform=youtube')).body.scheduledAt, first);
+  assert.equal((await json('/api/next-slot', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ platform: 'youtube', heldSlots: ['invalid'] }),
+  })).status, 400);
+});
+
+test('retrying an upload after losing the response does not create another post', async () => {
+  const scheduledAt = (await json('/api/next-slot?platform=youtube')).body.scheduledAt;
+  const send = () => {
+    const body = new FormData();
+    body.append('file', new Blob(['test'], { type: 'video/mp4' }), 'retry.mp4');
+    body.append('title', 'Safe retry');
+    body.append('platforms', 'youtube');
+    body.append('scheduledAt', scheduledAt);
+    body.append('scheduleMode', 'next');
+    body.append('uploadId', 'upload-retry-test-12345');
+    return json('/api/posts', { method: 'POST', body });
+  };
+  const before = db.listPosts().length;
+  const first = await send();
+  const retry = await send();
+  assert.equal(first.status, 201);
+  assert.equal(retry.status, 200);
+  assert.equal(first.body.id, retry.body.id);
+  assert.equal(db.listPosts().length, before + 1);
+});

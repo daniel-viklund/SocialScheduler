@@ -200,81 +200,153 @@ form.addEventListener('submit', async (e) => {
     }
   }
 
-  const fd = new FormData();
-  fd.append('file', form.file.files[0]);
-  fd.append('title', form.title.value);
-  fd.append('description', form.description.value);
-  fd.append('scheduleMode', form.scheduleMode.value);
-  fd.append('scheduledAt', form.scheduleMode.value === 'next' ? suggestedSlot.scheduledAt : new Date(form.scheduledAt.value).toISOString());
-  for (const p of platforms) fd.append('platforms', p);
+  if (!file) return showMsg('Choose a file first', true);
+  const bytes = new Uint8Array(16);
+  crypto.getRandomValues(bytes); // also available on the HTTP LAN site
+  const job = {
+    id: [...bytes].map((byte) => byte.toString(16).padStart(2, '0')).join(''),
+    file, title: form.title.value, description: form.description.value,
+    platform: platformSelect.value, mode: form.scheduleMode.value,
+    scheduledAt: form.scheduleMode.value === 'next' ? suggestedSlot.scheduledAt : new Date(form.scheduledAt.value).toISOString(),
+    status: 'queued', detail: 'Waiting to upload', progress: 0,
+  };
+  uploadQueue.push(job);
+  form.file.value = '';
+  form.title.value = '';
+  form.description.value = '';
+  showMsg('Added to the upload queue. You can schedule the next video now.', false);
+  renderUploadQueue();
+  refreshNextSlot();
+  processUploadQueue();
+});
 
-  const btn = $('#submit-btn');
-  uploading = true;
-  btn.disabled = true;
-  for (const field of form.querySelectorAll('input, textarea, select')) field.disabled = true;
-  btn.textContent = 'Uploading…';
+const uploadQueue = [];
+let queueRunning = false;
+
+function renderUploadQueue() {
+  $('#upload-queue').hidden = uploadQueue.length === 0;
+  const list = $('#upload-queue-list');
+  list.innerHTML = '';
+  for (const job of uploadQueue) {
+    const row = document.createElement('div');
+    row.className = 'post upload-job';
+    const name = document.createElement('strong');
+    name.textContent = job.fileName || job.file.name;
+    const when = document.createElement('p');
+    when.className = 'hint';
+    when.textContent = `${platformLabel(job.platform)} · ${new Date(job.scheduledAt).toLocaleString()}`;
+    const detail = document.createElement('p');
+    detail.className = `hint${job.status === 'failed' ? ' error' : ''}`;
+    detail.textContent = job.detail;
+    row.append(name, when, detail);
+    if (job.status === 'uploading') {
+      const bar = document.createElement('div');
+      bar.className = 'bar';
+      const fill = document.createElement('div');
+      fill.className = 'bar-fill';
+      fill.style.width = `${job.progress}%`;
+      bar.appendChild(fill);
+      row.appendChild(bar);
+    }
+    const actions = document.createElement('div');
+    actions.className = 'post-actions';
+    if (job.status === 'failed') {
+      const retry = document.createElement('button');
+      retry.className = 'btn small';
+      retry.textContent = 'Retry upload';
+      retry.onclick = () => {
+        job.status = 'queued';
+        job.detail = 'Waiting to retry';
+        renderUploadQueue();
+        refreshNextSlot();
+        processUploadQueue();
+      };
+      actions.appendChild(retry);
+    }
+    if (job.status !== 'uploading') {
+      const remove = document.createElement('button');
+      remove.className = 'btn small';
+      remove.textContent = job.status === 'done' ? 'Dismiss' : 'Remove';
+      remove.onclick = () => {
+        uploadQueue.splice(uploadQueue.indexOf(job), 1);
+        renderUploadQueue();
+        refreshNextSlot();
+      };
+      actions.appendChild(remove);
+    }
+    row.appendChild(actions);
+    list.appendChild(row);
+  }
+}
+
+async function processUploadQueue() {
+  if (queueRunning) return;
+  queueRunning = true;
   try {
-    const created = await uploadWithProgress(fd);
-    const notes = created.warnings?.length ? ` — ${created.warnings.join(' · ')}` : '';
-    showMsg(`Scheduled for ${new Date(created.scheduled_at).toLocaleString()} ✔${notes}`, false);
-    form.file.value = '';
-    form.title.value = '';
-    form.description.value = '';
-    await loadPosts();
-    await loadStatus();
-  } catch (err) {
-    showMsg(err.message, true);
+    let job;
+    while ((job = uploadQueue.find((item) => item.status === 'queued'))) {
+      job.status = 'uploading';
+      job.detail = 'Starting upload…';
+      job.progress = 0;
+      renderUploadQueue();
+      const fd = new FormData();
+      fd.append('file', job.file);
+      fd.append('title', job.title);
+      fd.append('description', job.description);
+      fd.append('platforms', job.platform);
+      fd.append('scheduleMode', job.mode);
+      fd.append('scheduledAt', job.scheduledAt);
+      fd.append('uploadId', job.id);
+      try {
+        const created = await uploadWithProgress(fd, job);
+        job.status = 'done';
+        job.scheduledAt = created.scheduled_at;
+        job.detail = `Scheduled ✔${created.warnings?.length ? ' — ' + created.warnings.join(' · ') : ''}`;
+        job.fileName = job.file.name;
+        job.file = null; // release the completed file reference
+      } catch (error) {
+        job.status = 'failed';
+        job.detail = error.message;
+      }
+      renderUploadQueue();
+      // A refresh failure must not turn a successful upload into a failed job.
+      await Promise.allSettled([loadPosts(), loadStatus(), refreshNextSlot()]);
+    }
   } finally {
-    uploading = false;
-    for (const field of form.querySelectorAll('input, textarea, select')) field.disabled = false;
-    btn.textContent = 'Schedule';
-    applyScheduleMode();
-    await refreshNextSlot();
-    $('#upload-progress').hidden = true;
+    queueRunning = false;
+  }
+}
+
+window.addEventListener('beforeunload', (event) => {
+  if (uploadQueue.some((job) => job.status !== 'done')) {
+    event.preventDefault();
+    event.returnValue = '';
   }
 });
 
-// Multi-GB uploads over wifi take tens of minutes, so show real progress
-// rather than leaving the button spinning. XHR is the only way to observe it.
-function uploadWithProgress(fd) {
+function uploadWithProgress(fd, job) {
   return new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest();
-    const box = $('#upload-progress');
-    const bar = $('#upload-bar');
-    const detail = $('#upload-detail');
-    box.hidden = false;
-    bar.style.width = '0%';
-    bar.className = 'bar-fill';
-    detail.textContent = 'Starting…';
     const started = Date.now();
-
-    xhr.upload.addEventListener('progress', (e) => {
-      if (!e.lengthComputable) return;
-      const pct = (e.loaded / e.total) * 100;
-      bar.style.width = `${pct.toFixed(1)}%`;
-      const elapsed = (Date.now() - started) / 1000;
-      const rate = e.loaded / elapsed;
-      const eta = rate > 0 ? (e.total - e.loaded) / rate : NaN;
-      detail.textContent =
-        `${pct.toFixed(1)}% · ${fmtBytes(e.loaded)} of ${fmtBytes(e.total)} · ${fmtBytes(rate)}/s · ${fmtDuration(eta)} left`;
+    xhr.upload.addEventListener('progress', (event) => {
+      if (!event.lengthComputable) return;
+      job.progress = (event.loaded / event.total) * 100;
+      const rate = event.loaded / ((Date.now() - started) / 1000);
+      job.detail = job.progress >= 100 ? 'Upload received; checking file and saving schedule…' :
+        `${job.progress.toFixed(1)}% · ${fmtBytes(event.loaded)} of ${fmtBytes(event.total)} · ${fmtBytes(rate)}/s · ${fmtDuration(rate > 0 ? (event.total - event.loaded) / rate : NaN)} left`;
+      renderUploadQueue();
     });
-
     xhr.addEventListener('load', () => {
       let data = {};
-      try { data = JSON.parse(xhr.responseText); } catch { /* non-JSON error page */ }
-      if (xhr.status >= 200 && xhr.status < 300) {
-        detail.textContent = 'Done';
-        resolve(data);
-      } else {
-        reject(new Error(data.error || `Request failed (${xhr.status})`));
-      }
+      try { data = JSON.parse(xhr.responseText); } catch { /* proxy error */ }
+      if (xhr.status >= 200 && xhr.status < 300) resolve(data);
+      else reject(new Error(data.error || `Request failed (${xhr.status})`));
     });
-    xhr.addEventListener('error', () => reject(new Error('Network error during upload — connection dropped')));
+    xhr.addEventListener('error', () => reject(new Error('Connection dropped. Retry to finish this upload safely.')));
     xhr.addEventListener('abort', () => reject(new Error('Upload cancelled')));
     xhr.addEventListener('timeout', () => reject(new Error('Upload timed out')));
-
     xhr.open('POST', '/api/posts');
-    xhr.timeout = 0; // a slow multi-GB upload is normal here
+    xhr.timeout = 0;
     xhr.send(fd);
   });
 }
@@ -387,7 +459,7 @@ let editingKey = null;
 async function loadPosts() {
   lastPosts = await api('/api/posts');
   renderPosts();
-  if (!uploading) await refreshNextSlot();
+  await refreshNextSlot();
 }
 
 function renderPosts() {
@@ -871,30 +943,35 @@ function initResched(platform) {
 
 let suggestedSlot = null;
 let slotRequest = 0;
-let uploading = false;
 
 function updateScheduleButton() {
-  $('#submit-btn').disabled = uploading || (form.scheduleMode.value === 'next' && !suggestedSlot);
+  $('#submit-btn').disabled = (form.scheduleMode.value === 'next' && !suggestedSlot);
 }
 
 function applyScheduleMode() {
   const manual = form.scheduleMode.value === 'manual';
   $('#manual-schedule').hidden = !manual;
   $('#next-slot-panel').hidden = manual;
-  form.scheduledAt.disabled = !manual || uploading;
+  form.scheduledAt.disabled = !manual;
   form.scheduledAt.required = manual;
   updateScheduleButton();
 }
 
 async function refreshNextSlot() {
-  if (uploading) return;
   const request = ++slotRequest;
   suggestedSlot = null;
   updateScheduleButton();
   $('#next-slot').textContent = 'Finding next available slot…';
   try {
-    const slot = await api(`/api/next-slot?platform=${encodeURIComponent(platformSelect.value)}`);
-    if (request !== slotRequest || uploading) return;
+    const slot = await api('/api/next-slot', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        platform: platformSelect.value,
+        heldSlots: uploadQueue.filter((job) => job.platform === platformSelect.value && job.status !== 'done')
+          .map((job) => job.scheduledAt),
+      }),
+    });
+    if (request !== slotRequest) return;
     suggestedSlot = slot;
     const when = new Date(slot.scheduledAt).toLocaleString(undefined, {
       timeZone: slot.timezone, weekday: 'long', year: 'numeric', month: 'long', day: 'numeric',
@@ -902,7 +979,7 @@ async function refreshNextSlot() {
     });
     $('#next-slot').textContent = `Next available: ${when} (${slot.timezone})`;
   } catch (err) {
-    if (request !== slotRequest || uploading) return;
+    if (request !== slotRequest) return;
     $('#next-slot').textContent = `Could not find a slot: ${err.message}. Retry or pick a specific date and time.`;
   }
   updateScheduleButton();
