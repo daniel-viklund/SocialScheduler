@@ -118,6 +118,21 @@ In the personal Cloudflare tunnel, route `scheduler.example.com` to
 **HTTP → `127.0.0.1:3000`**. The port binds only to Debian's loopback interface.
 Keep `PUBLIC_BASE_URL=https://scheduler.example.com` in `.env`.
 
+For direct uploads at home, open **http://192.168.0.63:3000**. A separate nginx
+container binds to that LAN address and accepts only clients from `192.168.0.0/24`.
+It streams uploads directly to the app. LAN access bypasses Cloudflare Access:
+devices on this subnet can use the scheduler without a login, over plain HTTP.
+Use a trusted home network and do not forward port 3000 on the router. Reserve
+`192.168.0.63` for Debian in the router's DHCP settings so the binding stays valid.
+The Cloudflare route continues using `127.0.0.1:3000`; keep the public URL for OAuth
+connections and Instagram media fetching.
+
+The host's `bikefable-firewall` also needs an exception before its forward-chain
+drop rule. Run once on Debian: `sudo python3 ~/socialscheduler/deploy/enable-lan-firewall.py`.
+This backs up and syntax-checks the existing configuration, then permits only
+home-LAN traffic originally addressed to `192.168.0.63:3000` and translated by
+Docker to the nginx port. The exception persists across reboots.
+
 ```bash
 ssh debian 'cd ~/socialscheduler && docker compose ps'
 ssh debian 'cd ~/socialscheduler && docker compose logs --tail=50'
