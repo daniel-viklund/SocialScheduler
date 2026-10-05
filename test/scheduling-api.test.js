@@ -73,10 +73,16 @@ test('settings, booking conflicts, manual scheduling, editing and deletion', asy
   assert.equal(manual.status, 201);
   assert.notEqual((await json('/api/next-slot?platform=youtube')).body.scheduledAt, changed.scheduledAt);
 
-  // Existing posts still support manual editing; moving one frees its slot.
+  // Moving within the same date keeps the day occupied; another date frees it.
   const moved = new Date(Date.parse(changed.scheduledAt) + 3600000).toISOString();
   assert.equal((await json(`/api/posts/${manual.body.id}`, {
     method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ scheduledAt: moved }),
+  })).status, 200);
+  assert.notEqual((await json('/api/next-slot?platform=youtube')).body.scheduledAt, changed.scheduledAt);
+  assert.equal((await upload(changed.scheduledAt, 'next')).status, 409);
+  assert.equal((await json(`/api/posts/${manual.body.id}`, {
+    method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ scheduledAt: new Date(Date.parse(moved) + 86400000).toISOString() }),
   })).status, 200);
   assert.equal((await json('/api/next-slot?platform=youtube')).body.scheduledAt, changed.scheduledAt);
 
@@ -103,7 +109,7 @@ test('queued slots stay distinct and later uploads survive an earlier removal', 
   const first = (await json('/api/next-slot?platform=youtube')).body.scheduledAt;
   const next = await json('/api/next-slot', {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ platform: 'youtube', heldSlots: [first] }),
+    body: JSON.stringify({ platform: 'youtube', heldSlots: [new Date(Date.parse(first) - 3600000).toISOString()] }),
   });
   assert.equal(next.status, 200);
   assert.notEqual(next.body.scheduledAt, first);

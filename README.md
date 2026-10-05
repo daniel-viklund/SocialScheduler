@@ -28,8 +28,9 @@ saved in SQLite and shared across browsers.
 
 New posts default to **Next available slot**. Suggestions search forward from now,
 fill gaps, and skip existing bookings on that platform, including manual bookings
-and posts created before the latest settings change. A booking occupies its minute;
-a post at another time on the same day does not consume the recurring slot.
+and posts created before the latest settings change. Any booking occupies its entire calendar
+date in that platform’s configured timezone, even if its time differs from the
+recurring posting time. Manual scheduling can still explicitly choose that date.
 Changing settings never moves existing posts. **Pick a specific date and time**
 keeps manual scheduling available, using the browser timezone displayed below it.
 

@@ -51,3 +51,16 @@ test('validates the complete settings before saving', () => {
     assert.throws(() => validatePostingSchedule({ ...DEFAULT_POSTING_SCHEDULE, youtube: { ...friday, ...invalid } }));
   }
 });
+
+test('a midnight booking blocks the evening slot on the same local date', () => {
+  // Friday midnight in Stockholm is Thursday in UTC.
+  assert.equal(nextAvailableSlot(friday, ['2026-10-08T22:00:00Z'], '2026-10-05T10:00:00Z'), '2026-10-16T16:00:00.000Z');
+  // Even if the earlier post already ran today, don't suggest a second one.
+  assert.equal(nextAvailableSlot(friday, ['2026-10-08T22:00:00Z'], '2026-10-09T10:00:00Z'), '2026-10-16T16:00:00.000Z');
+  // Thursday in the platform timezone does not occupy Friday.
+  assert.equal(nextAvailableSlot(friday, ['2026-10-08T21:59:00Z'], '2026-10-05T10:00:00Z'), '2026-10-09T16:00:00.000Z');
+});
+
+test('a later booking on the date blocks an earlier recurring time', () => {
+  assert.equal(nextAvailableSlot(friday, ['2026-10-09T21:00:00Z'], '2026-10-05T10:00:00Z'), '2026-10-16T16:00:00.000Z');
+});

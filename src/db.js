@@ -197,12 +197,13 @@ export function savePostingSchedule(value) {
 export function getNextSlot(platform, now = new Date(), heldSlots = []) {
   const schedule = getPostingSchedule()[platform];
   if (!schedule) throw new Error('Choose youtube or instagram');
-  // Include older bookings, manual dates, and failed posts that can be retried.
+  // Include all of the current local day, even a 25-hour DST day, plus future
+  // bookings. Manual dates and failed posts also occupy their calendar day.
   const occupied = db.prepare(`
     SELECT p.scheduled_at FROM posts p
     JOIN post_targets t ON t.post_id = p.id
     WHERE t.platform = ? AND p.scheduled_at > ?
-  `).all(platform, new Date(new Date(now).getTime() - 86400000).toISOString());
+  `).all(platform, new Date(new Date(now).getTime() - 2 * 86400000).toISOString());
   return { scheduledAt: nextAvailableSlot(schedule, [...occupied.map((p) => p.scheduled_at), ...heldSlots], now), ...schedule };
 }
 

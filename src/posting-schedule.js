@@ -46,7 +46,8 @@ export function nextAvailableSlot(spec, occupied = [], now = new Date()) {
   const localDay = new Date(clock(nowMs));
   localDay.setUTCHours(0, 0, 0, 0);
   const [hour, minute] = spec.time.split(':').map(Number);
-  const booked = new Set(occupied.map((date) => Math.floor(new Date(date).getTime() / 60000)));
+  // Occupancy is per local calendar date, regardless of the posting time.
+  const booked = new Set(occupied.map((date) => Math.floor(clock(new Date(date).getTime()) / 86400000)));
 
   // Each booking can consume at most one recurrence. Extra weeks cover DST gaps.
   for (let day = 0; day < (booked.size + 3) * 7; day++) {
@@ -62,8 +63,7 @@ export function nextAvailableSlot(spec, occupied = [], now = new Date()) {
       // Spring-forward missing times are skipped. A repeated autumn time is
       // one slot, at its first occurrence, never two posts on the same local slot.
       const slot = candidates[0];
-      if (slot > nowMs && !booked.has(Math.floor(slot / 60000)) &&
-          !candidates.some((ms) => booked.has(Math.floor(ms / 60000)))) {
+      if (slot > nowMs && !booked.has(Math.floor(localDay.getTime() / 86400000))) {
         return new Date(slot).toISOString();
       }
     }
