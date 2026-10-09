@@ -1,1086 +1,1408 @@
-const $ = (sel) => document.querySelector(sel);
-
-const fmtBytes = (n) => {
-  if (!Number.isFinite(n)) return '–';
-  const units = ['B', 'KB', 'MB', 'GB', 'TB'];
-  let i = 0;
-  while (n >= 1024 && i < units.length - 1) { n /= 1024; i += 1; }
-  return `${n.toFixed(n < 10 && i > 0 ? 1 : 0)} ${units[i]}`;
+const $ = (selector, parent = document) => parent.querySelector(selector);
+const $$ = (selector, parent = document) => [
+  ...parent.querySelectorAll(selector),
+];
+const esc = (value) =>
+  String(value ?? '').replace(
+    /[&<>"']/g,
+    (c) =>
+      ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[
+        c
+      ],
+  );
+const icons = {
+  library:
+    '<rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/>',
+  calendar:
+    '<rect x="3" y="5" width="18" height="16" rx="3"/><path d="M7 3v4m10-4v4M3 11h18m-13 5h2m4 0h2"/>',
+  settings:
+    '<path d="M4 7h16M4 17h16"/><circle cx="9" cy="7" r="3" fill="currentColor"/><circle cx="16" cy="17" r="3" fill="currentColor"/>',
+  plus: '<path d="M12 5v14M5 12h14"/>',
+  upload:
+    '<path d="M12 16V3m-5 5 5-5 5 5M4 15v5a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-5"/>',
+  search: '<circle cx="10.5" cy="10.5" r="6.5"/><path d="m16 16 4 4"/>',
+  spark:
+    '<path d="m12 2 2.5 7.5L22 12l-7.5 2.5L12 22l-2.5-7.5L2 12l7.5-2.5Z"/>',
+  video:
+    '<rect x="3" y="5" width="18" height="14" rx="3"/><path d="m10 9 5 3-5 3Z"/>',
+  image:
+    '<rect x="3" y="3" width="18" height="18" rx="3"/><circle cx="8" cy="8" r="1.5"/><path d="m3 17 6-6 4 4 3-3 5 5"/>',
+  youtube:
+    '<rect x="2" y="5" width="20" height="14" rx="4"/><path d="m10 9 5 3-5 3Z"/>',
+  instagram:
+    '<rect x="3" y="3" width="18" height="18" rx="5"/><circle cx="12" cy="12" r="4"/><path d="M17 7h.01"/>',
+  check: '<path d="m5 12 4 4L19 6"/>',
+  clock: '<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>',
 };
-
-const fmtDuration = (secs) => {
-  if (!Number.isFinite(secs) || secs < 0) return '–';
-  if (secs < 90) return `${Math.round(secs)}s`;
-  const m = Math.floor(secs / 60);
-  if (m < 60) return `${m}m`;
-  return `${Math.floor(m / 60)}h ${m % 60}m`;
-};
-
-// <input type="datetime-local"> wants wall-clock time, not UTC.
-const toLocalInput = (date) => {
-  const d = new Date(date);
-  return new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 16);
-};
-
-let maxUploadBytes = Infinity;
-let instagramLimits = { reelMaxBytes: Infinity, imageMaxBytes: Infinity };
-
-async function api(path, opts) {
-  const res = await fetch(path, opts);
-  const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(data.error || `Request failed (${res.status})`);
-  return data;
-}
-
-/* ---------- connections ---------- */
-
-async function loadStatus() {
-  const status = await api('/api/status');
-
-  const yt = $('#conn-youtube');
-  const ytDot = yt.querySelector('.dot');
-  const ytState = yt.querySelector('.conn-state');
-  const ytBtn = $('#yt-connect');
-  if (!status.youtube.configured) {
-    ytDot.className = 'dot err';
-    ytState.textContent = 'not configured (set YT_CLIENT_ID / YT_CLIENT_SECRET in .env)';
-    ytBtn.hidden = true;
-  } else if (!status.youtube.connected) {
-    // A refresh token Google has rejected: the row goes red and the button
-    // says reconnect, with the full reason in the hint below.
-    const dead = Boolean(status.youtube.error);
-    ytDot.className = dead ? 'dot err' : 'dot warn';
-    ytState.textContent = dead ? 'access expired or revoked' : 'not connected';
-    ytBtn.textContent = dead ? 'Reconnect YouTube' : 'Connect YouTube';
-    ytBtn.hidden = false;
-  } else {
-    ytDot.className = 'dot ok';
-    ytState.textContent = 'connected';
-    ytBtn.hidden = true;
-  }
-
-  const ig = $('#conn-instagram');
-  const igDot = ig.querySelector('.dot');
-  const igState = ig.querySelector('.conn-state');
-  const igBtn = $('#ig-connect');
-  if (!status.instagram.configured) {
-    igDot.className = 'dot err';
-    igState.textContent = 'not configured (set IG_APP_ID / IG_APP_SECRET / PUBLIC_BASE_URL in .env)';
-    igBtn.hidden = true;
-  } else if (!status.instagram.connected) {
-    igDot.className = 'dot warn';
-    igState.textContent = 'not connected';
-    igBtn.hidden = false;
-  } else {
-    // Surface token expiry here: a silently expired token is the one failure
-    // mode that only shows up when a scheduled post is already overdue.
-    const days = status.instagram.tokenExpiresAt
-      ? Math.round((new Date(status.instagram.tokenExpiresAt) - Date.now()) / 864e5)
-      : null;
-    const who = status.instagram.username ? `connected as @${status.instagram.username}` : 'connected';
-    igDot.className = days !== null && days < 7 ? 'dot warn' : 'dot ok';
-    igState.textContent = days !== null ? `${who} · token valid ${days} more day(s)` : who;
-    igBtn.hidden = days !== null && days < 7 ? false : true;
-    if (!igBtn.hidden) igBtn.textContent = 'Reconnect Instagram';
-  }
-
-  if (typeof status.maxUploadBytes === 'number') maxUploadBytes = status.maxUploadBytes;
-  if (status.instagramLimits) instagramLimits = status.instagramLimits;
-
-  const box = $('#storage');
-  if (status.storage) {
-    const { total, free, used, uploadsBytes, uploadCount } = status.storage;
-    const pct = total > 0 ? (used / total) * 100 : 0;
-    box.hidden = false;
-    $('#storage-num').textContent = `${fmtBytes(free)} free of ${fmtBytes(total)}`;
-    const bar = $('#storage-bar');
-    bar.style.width = `${Math.min(100, pct).toFixed(1)}%`;
-    bar.className = `bar-fill${pct >= 90 ? ' err' : pct >= 75 ? ' warn' : ''}`;
-    $('#storage-detail').textContent =
-      `${fmtBytes(uploadsBytes)} in ${uploadCount} scheduled file${uploadCount === 1 ? '' : 's'} · ${pct.toFixed(0)}% of disk used`;
-
-    const orphanBox = $('#storage-orphans');
-    const orphanCount = status.storage.orphanCount ?? 0;
-    orphanBox.hidden = orphanCount === 0;
-    if (orphanCount > 0) {
-      $('#storage-orphan-text').textContent =
-        `${fmtBytes(status.storage.orphanBytes)} in ${orphanCount} leftover file${orphanCount === 1 ? '' : 's'} from interrupted uploads`;
-    }
-  } else {
-    box.hidden = true;
-  }
-
-  const hint = $('#conn-hint');
-  if (status.youtube.error) {
-    hint.hidden = false;
-    hint.textContent = status.youtube.error;
-  } else if (status.instagram.configured && !status.publicBaseUrl) {
-    hint.hidden = false;
-    hint.textContent = 'PUBLIC_BASE_URL is not set — Instagram cannot fetch your media without a public tunnel URL.';
-  } else if (!status.youtube.configured || !status.instagram.configured) {
-    hint.hidden = false;
-    hint.textContent = 'See the README for how to set up YouTube and Instagram credentials.';
-  } else {
-    hint.hidden = true;
-  }
-}
-
-/* ---------- new post form ---------- */
-
-const form = $('#post-form');
-const msg = $('#form-msg');
-
-// Instagram shows exactly one piece of text on a post, so it gets one field.
-// YouTube has a real title and a separate description.
-const PLATFORM_FIELDS = {
-  youtube: {
-    title: true,
-    label: 'Description',
-    placeholder: 'Optional description',
-    maxlength: 5000,
-  },
-  instagram: {
-    title: false,
-    label: 'Caption',
-    placeholder: 'The caption shown under the post — hashtags and all',
-    maxlength: 2200,
-  },
-};
-
-const platformSelect = $('#platform-select');
-
-function applyPlatformFields() {
-  const spec = PLATFORM_FIELDS[platformSelect.value];
-  // Moving to a caption-only platform: keep whatever was typed as a title
-  // rather than silently dropping it, since it is all one text over there.
-  if (!spec.title && form.title.value.trim()) {
-    form.description.value = [form.title.value.trim(), form.description.value]
-      .filter((t) => t.trim())
-      .join('\n\n');
-    form.title.value = '';
-  }
-  $('#title-field').hidden = !spec.title;
-  $('#text-label').textContent = spec.label;
-  form.description.placeholder = spec.placeholder;
-  form.description.maxLength = spec.maxlength;
-}
-
-platformSelect.addEventListener('change', applyPlatformFields);
-applyPlatformFields();
-
-// Keep a convenient starting value for the manual date picker.
-const inOneHour = new Date(Date.now() + 60 * 60 * 1000);
-inOneHour.setSeconds(0, 0);
-form.scheduledAt.value = toLocalInput(inOneHour);
-
-form.addEventListener('submit', async (e) => {
-  e.preventDefault();
-  msg.hidden = true;
-
-  if (form.scheduleMode.value === 'next' && !suggestedSlot) return showMsg('Wait for an available slot, or choose a specific date and time.', true);
-  const platforms = [platformSelect.value];
-  if (PLATFORM_FIELDS[platformSelect.value].title && !form.title.value.trim()) {
-    return showMsg('Title is required for YouTube', true);
-  }
-
-  const file = form.file.files[0];
-  if (file && file.size > maxUploadBytes) {
-    return showMsg(`${fmtBytes(file.size)} exceeds the ${fmtBytes(maxUploadBytes)} upload limit`, true);
-  }
-  // The server checks the file properly once it has it, but size alone rules
-  // out most exports and that is worth knowing before a multi-GB upload.
-  if (file && platforms.includes('instagram')) {
-    const isVideo = file.type.startsWith('video/');
-    const limit = isVideo ? instagramLimits.reelMaxBytes : instagramLimits.imageMaxBytes;
-    if (file.size > limit) {
-      return showMsg(
-        `${fmtBytes(file.size)} is over Instagram's ${fmtBytes(limit)} ${isVideo ? 'Reels' : 'image'} limit — export a smaller file or untick Instagram`,
-        true
-      );
-    }
-  }
-
-  if (!file) return showMsg('Choose a file first', true);
-  const bytes = new Uint8Array(16);
-  crypto.getRandomValues(bytes); // also available on the HTTP LAN site
-  const job = {
-    id: [...bytes].map((byte) => byte.toString(16).padStart(2, '0')).join(''),
-    file, title: form.title.value, description: form.description.value,
-    platform: platformSelect.value, mode: form.scheduleMode.value,
-    scheduledAt: form.scheduleMode.value === 'next' ? suggestedSlot.scheduledAt : new Date(form.scheduledAt.value).toISOString(),
-    status: 'queued', detail: 'Waiting to upload', progress: 0,
-  };
-  uploadQueue.push(job);
-  form.file.value = '';
-  form.title.value = '';
-  form.description.value = '';
-  showMsg('Added to the upload queue. You can schedule the next video now.', false);
-  renderUploadQueue();
-  refreshNextSlot();
-  processUploadQueue();
+const icon = (name, cls = '') =>
+  `<svg class="${cls}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${icons[name] || icons.library}</svg>`;
+$$('[data-icon]').forEach((el) => {
+  el.innerHTML = icon(el.dataset.icon);
 });
-
-const uploadQueue = [];
-let queueRunning = false;
-
-function renderUploadQueue() {
-  $('#upload-queue').hidden = uploadQueue.length === 0;
-  const list = $('#upload-queue-list');
-  list.innerHTML = '';
-  for (const job of uploadQueue) {
-    const row = document.createElement('div');
-    row.className = 'post upload-job';
-    const name = document.createElement('strong');
-    name.textContent = job.fileName || job.file.name;
-    const when = document.createElement('p');
-    when.className = 'hint';
-    when.textContent = `${platformLabel(job.platform)} · ${new Date(job.scheduledAt).toLocaleString()}`;
-    const detail = document.createElement('p');
-    detail.className = `hint${job.status === 'failed' ? ' error' : ''}`;
-    detail.textContent = job.detail;
-    row.append(name, when, detail);
-    if (job.status === 'uploading') {
-      const bar = document.createElement('div');
-      bar.className = 'bar';
-      const fill = document.createElement('div');
-      fill.className = 'bar-fill';
-      fill.style.width = `${job.progress}%`;
-      bar.appendChild(fill);
-      row.appendChild(bar);
-    }
-    const actions = document.createElement('div');
-    actions.className = 'post-actions';
-    if (job.status === 'failed') {
-      const retry = document.createElement('button');
-      retry.className = 'btn small';
-      retry.textContent = 'Retry upload';
-      retry.onclick = () => {
-        job.status = 'queued';
-        job.detail = 'Waiting to retry';
-        renderUploadQueue();
-        refreshNextSlot();
-        processUploadQueue();
-      };
-      actions.appendChild(retry);
-    }
-    if (job.status !== 'uploading') {
-      const remove = document.createElement('button');
-      remove.className = 'btn small';
-      remove.textContent = job.status === 'done' ? 'Dismiss' : 'Remove';
-      remove.onclick = () => {
-        uploadQueue.splice(uploadQueue.indexOf(job), 1);
-        renderUploadQueue();
-        refreshNextSlot();
-      };
-      actions.appendChild(remove);
-    }
-    row.appendChild(actions);
-    list.appendChild(row);
+const names = { youtube: 'YouTube', instagram: 'Instagram' };
+const badge = (p) => `<span class="badge ${p}">${icon(p)}${names[p]}</span>`;
+const size = (bytes) =>
+  bytes == null
+    ? 'Missing file'
+    : bytes < 1024 ** 2
+      ? `${Math.max(1, Math.round(bytes / 1024))} KB`
+      : bytes < 1024 ** 3
+        ? `${(bytes / 1024 ** 2).toFixed(1)} MB`
+        : `${(bytes / 1024 ** 3).toFixed(1)} GB`;
+const zone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+const dateText = (value, timezone = zone) =>
+  new Intl.DateTimeFormat(undefined, {
+    timeZone: timezone,
+    weekday: 'short',
+    month: 'short',
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  }).format(new Date(value));
+const localInput = (value) => {
+  const date = new Date(value);
+  return new Date(date.getTime() - date.getTimezoneOffset() * 60000)
+    .toISOString()
+    .slice(0, 16);
+};
+const uid = () =>
+  globalThis.crypto?.randomUUID?.() ||
+  `request-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+const state = {
+  media: [],
+  posts: [],
+  status: null,
+  routine: null,
+  selected: new Set(),
+  platform: 'all',
+  postFilter: 'upcoming',
+  view: 'library',
+  loaded: false,
+};
+let dialogBusy = false;
+let toastTimer;
+async function api(path, { body, ...options } = {}) {
+  const response = await fetch(path, {
+    ...options,
+    headers: {
+      ...(body ? { 'Content-Type': 'application/json' } : {}),
+      ...options.headers,
+    },
+    ...(body ? { body: JSON.stringify(body) } : {}),
+  });
+  const result = await response.json().catch(() => ({
+    error: 'The server returned an unexpected response. Please try again.',
+  }));
+  if (!response.ok)
+    throw new Error(result.error || `Request failed (${response.status})`);
+  return result;
+}
+function toast(message, error = false) {
+  const el = $('#toast');
+  el.textContent = message;
+  el.className = `toast${error ? ' error' : ''}`;
+  el.hidden = false;
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(
+    () => {
+      el.hidden = true;
+    },
+    error ? 8000 : 4500,
+  );
+}
+function showDialog(title, eyebrow, content, wide = false) {
+  if ($('#dialog').open) $('#dialog').close();
+  $('#dialog-title').textContent = title;
+  $('#dialog-eyebrow').textContent = eyebrow;
+  $('#dialog-content').innerHTML = content;
+  $('#dialog').classList.toggle('wide', wide);
+  dialogBusy = false;
+  $('#close-dialog').disabled = false;
+  $('#dialog').showModal();
+}
+function closeDialog() {
+  if (!dialogBusy) $('#dialog').close();
+}
+$('#close-dialog').onclick = closeDialog;
+$('#dialog').addEventListener('close', () => {
+  $$('video', $('#dialog')).forEach((video) => video.pause());
+});
+$('#dialog').addEventListener('cancel', (event) => {
+  if (dialogBusy) event.preventDefault();
+});
+function busyDialog(value) {
+  dialogBusy = value;
+  $('#close-dialog').disabled = value;
+}
+function dialogError(message) {
+  const el = $('#dialog-error');
+  if (el) {
+    el.textContent = message;
+    el.hidden = false;
+    el.scrollIntoView({ block: 'nearest' });
   }
 }
+const errorBox =
+  '<div id="dialog-error" class="notice error" role="alert" hidden></div>';
+function go(view) {
+  location.hash = view;
+  navigate();
+}
+function navigate() {
+  const previous = state.view;
+  const view = location.hash.slice(1);
+  state.view = ['library', 'schedule', 'settings'].includes(view)
+    ? view
+    : 'library';
+  $$('.view').forEach((el) => {
+    el.hidden = el.id !== `view-${state.view}`;
+  });
+  $$('[data-nav]').forEach((el) => {
+    const active = el.dataset.nav === state.view;
+    el.classList.toggle('active', active);
+    if (active) el.setAttribute('aria-current', 'page');
+    else el.removeAttribute('aria-current');
+  });
+  const title = {
+    library: 'Media library',
+    schedule: 'Schedule',
+    settings: 'Settings',
+  }[state.view];
+  $('#breadcrumb').textContent = title;
+  document.title = `${title} · Social Scheduler`;
+  if (previous !== state.view) window.scrollTo({ top: 0, behavior: 'instant' });
+}
+window.addEventListener('hashchange', navigate);
+navigate();
+async function refreshData() {
+  const [media, posts] = await Promise.all([
+    api('/api/media'),
+    api('/api/posts'),
+  ]);
+  state.media = media;
+  state.posts = posts;
+  state.loaded = true;
+  for (const id of state.selected)
+    if (!media.some((m) => m.id === id)) state.selected.delete(id);
+  renderLibrary();
+  renderPosts();
+  $('#page-error').hidden = true;
+}
+async function refreshStatus() {
+  const [status, routine] = await Promise.all([
+    api('/api/status'),
+    api('/api/settings/posting-schedule'),
+  ]);
+  state.status = status;
+  state.routine = routine;
+  renderSettings();
+}
+const summary = (count, label, glyph) =>
+  `<div class="summary-item"><div class="summary-icon">${icon(glyph)}</div><div><div class="summary-number">${count}</div><div class="summary-label">${label}</div></div></div>`;
+function filteredMedia() {
+  const search = $('#library-search').value.trim().toLowerCase();
+  return state.media.filter(
+    (m) =>
+      (state.platform === 'all' ||
+        (state.platform === 'none'
+          ? !m.platforms.length
+          : m.platforms.includes(state.platform))) &&
+      (!search ||
+        `${m.original_name} ${m.title} ${m.description}`
+          .toLowerCase()
+          .includes(search)) &&
+      ($('#media-kind').value === 'all' ||
+        m.mime_type.startsWith(`${$('#media-kind').value}/`)) &&
+      ($('#media-state').value === 'all' ||
+        ($('#media-state').value === 'unused'
+          ? m.post_count === 0
+          : m.post_count > 0)),
+  );
+}
+function empty(title, copy, action, button, glyph = 'library') {
+  return `<div class="empty-state"><div class="empty-art">${icon(glyph)}</div><h3>${title}</h3><p>${copy}</p>${button ? `<button class="btn primary" data-action="${action}">${icon('plus')}${button}</button>` : ''}</div>`;
+}
+function renderLibrary() {
+  $('#library-count').textContent = state.media.length;
+  $('#media-total').textContent = state.media.length;
+  $('#library-summary').innerHTML =
+    summary(state.media.length, 'Files in your library', 'library') +
+    summary(
+      state.media.filter((m) => !m.post_count).length,
+      'Not scheduled yet',
+      'spark',
+    ) +
+    summary(
+      state.posts.filter((p) => ['scheduled', 'processing'].includes(p.status))
+        .length,
+      'Posts coming up',
+      'calendar',
+    );
+  $('#platform-tabs').innerHTML = [
+    ['all', 'All files'],
+    ['youtube', 'YouTube'],
+    ['instagram', 'Instagram'],
+    ['none', 'Uncategorized'],
+  ]
+    .map(
+      ([key, label]) =>
+        `<button data-filter="${key}" class="${state.platform === key ? 'active' : ''}" aria-pressed="${state.platform === key}">${label}<span>${state.media.filter((m) => key === 'all' || (key === 'none' ? !m.platforms.length : m.platforms.includes(key))).length}</span></button>`,
+    )
+    .join('');
+  const visible = filteredMedia();
+  $('#visible-count').textContent = `(${visible.length})`;
+  $('#select-all').checked =
+    visible.length > 0 && visible.every((m) => state.selected.has(m.id));
+  $('#select-all').indeterminate =
+    visible.some((m) => state.selected.has(m.id)) && !$('#select-all').checked;
+  $('#select-all').disabled = !visible.length;
+  $('#media-grid').innerHTML = visible.length
+    ? visible.map(mediaCard).join('')
+    : state.media.length
+      ? empty(
+          'No files found',
+          'Try another search or filter to find what you’re looking for.',
+          'reset-filters',
+          'Reset filters',
+          'search',
+        )
+      : empty(
+          'No files uploaded',
+          'Upload videos or images to save in the library or schedule for publishing.',
+          'upload',
+          'Upload files',
+        );
+  updateSelection();
+}
+function mediaCard(m) {
+  const video = m.mime_type.startsWith('video/');
+  const url = `/media/${encodeURIComponent(m.file_name)}`;
+  return `<article class="media-card${state.selected.has(m.id) ? ' selected' : ''}" data-media="${m.id}"><div class="media-cover"><button data-detail="${m.id}" aria-label="Preview ${esc(m.original_name)}">${icon(video ? 'video' : 'image', 'file-placeholder')}${!m.file_missing ? (video ? `<video src="${url}#t=0.1" preload="metadata" muted playsinline aria-hidden="true"></video>` : `<img src="${url}" alt="" loading="lazy" />`) : ''}</button><label class="media-check"><input type="checkbox" data-select="${m.id}" aria-label="Select ${esc(m.original_name)}" ${state.selected.has(m.id) ? 'checked' : ''} /></label><span class="media-type">${video ? 'Video' : 'Image'}</span></div><div class="media-body"><button class="file-title" data-detail="${m.id}" title="${esc(m.original_name)}">${esc(m.original_name)}</button><p class="file-meta${m.file_missing ? ' missing' : ''}">${size(m.file_size)} · ${new Date(m.created_at).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}</p><div class="badges">${m.platforms.length ? m.platforms.map(badge).join('') : '<span class="badge">Uncategorized</span>'}</div></div><div class="media-footer"><span>${m.post_count ? `Used in ${m.post_count} post${m.post_count === 1 ? '' : 's'}` : 'Not scheduled yet'}</span><button data-schedule="${m.id}" ${m.file_missing ? 'disabled' : ''}>Schedule →</button></div></article>`;
+}
+function updateSelection() {
+  $('#selection-bar').hidden = !state.selected.size;
+  $('#selection-count').textContent =
+    `${state.selected.size} file${state.selected.size === 1 ? '' : 's'} selected`;
+}
+$('#platform-tabs').onclick = (event) => {
+  const button = event.target.closest('[data-filter]');
+  if (button) {
+    state.platform = button.dataset.filter;
+    renderLibrary();
+  }
+};
+$('#library-search').oninput = renderLibrary;
+$('#media-kind').onchange = renderLibrary;
+$('#media-state').onchange = renderLibrary;
+$('#select-all').onchange = (event) => {
+  filteredMedia().forEach((m) =>
+    event.target.checked
+      ? state.selected.add(m.id)
+      : state.selected.delete(m.id),
+  );
+  renderLibrary();
+};
+$('#clear-selection').onclick = () => {
+  state.selected.clear();
+  renderLibrary();
+};
+$('#media-grid').onchange = (event) => {
+  if (event.target.matches('[data-select]')) {
+    const id = +event.target.dataset.select;
+    event.target.checked ? state.selected.add(id) : state.selected.delete(id);
+    event.target
+      .closest('.media-card')
+      .classList.toggle('selected', event.target.checked);
+    const visible = filteredMedia();
+    $('#select-all').checked = visible.every((m) => state.selected.has(m.id));
+    $('#select-all').indeterminate =
+      visible.some((m) => state.selected.has(m.id)) &&
+      !$('#select-all').checked;
+    updateSelection();
+  }
+};
+$('#media-grid').onclick = (event) => {
+  const detail = event.target.closest('[data-detail]');
+  const schedule = event.target.closest('[data-schedule]');
+  if (detail) openMedia(+detail.dataset.detail);
+  if (schedule) openSchedule([+schedule.dataset.schedule]);
+};
+$('#schedule-selected').onclick = () => openSchedule([...state.selected]);
+function resetFilters() {
+  state.platform = 'all';
+  $('#library-search').value = '';
+  $('#media-kind').value = 'all';
+  $('#media-state').value = 'all';
+  renderLibrary();
+}
+document.addEventListener('click', (event) => {
+  const action = event.target.closest('[data-action]')?.dataset.action;
+  if (action === 'upload') openUpload();
+  if (action === 'upload-schedule') openUpload([], true);
+  if (action === 'pick-media') {
+    go('library');
+    resetFilters();
+    toast('Select one or more files, then choose Schedule selected.');
+  }
+  if (action === 'reset-filters') resetFilters();
+});
+const categoryOptions = (selected = '', includeUncategorized = true) =>
+  [
+    ['', 'Uncategorized'],
+    ['youtube', 'YouTube'],
+    ['instagram', 'Instagram'],
+    ['youtube,instagram', 'Both platforms'],
+  ]
+    .filter(([value]) => includeUncategorized || value)
+    .map(
+      ([value, label]) =>
+        `<option value="${value}" ${value === selected ? 'selected' : ''}>${label}</option>`,
+    )
+    .join('');
+const categoryValue = (platforms) =>
+  ['youtube', 'instagram'].filter((p) => platforms.includes(p)).join(',');
+const chosenPlatforms = (value) => (value ? value.split(',') : []);
 
-async function processUploadQueue() {
-  if (queueRunning) return;
-  queueRunning = true;
+// Upload a batch one file at a time, keeping each successful file even if another fails.
+const uploadJobs = [];
+let uploading = false;
+let refreshUploadPreview = null;
+function openUpload(initial = [], scheduleImmediately = false) {
+  const files = [];
+  let schedule = false;
+  let scheduleMode = 'auto';
+  let previewVersion = 0;
+  let previewReady = false;
+  showDialog(
+    'Upload your files.',
+    'UPLOAD OPTIONS',
+    `<p class="dialog-copy">Keep files in your library, or choose publishing dates as you upload.</p>
+    <label class="field">Upload mode<select id="upload-mode"><option value="library">Save to library</option><option value="schedule">Upload & schedule</option></select></label>
+    <label class="field">Platform<select id="upload-category">${categoryOptions(state.platform === 'youtube' || state.platform === 'instagram' ? state.platform : '')}</select><span class="muted">Apply a platform to all files, then adjust individual files below.</span></label>
+    <label class="drop-zone" id="drop-zone">${icon('upload')}<strong>Drop your videos and images here</strong><span>or choose files from your device</span><input id="upload-files" type="file" accept="video/*,image/*" multiple /></label>
+    <div id="upload-date-default" hidden><label class="field">Publishing time<select id="upload-schedule-mode"><option value="auto">Next available slot</option><option value="manual">Choose a date and time</option></select></label><p id="upload-next-info" class="notice">Suggested dates below follow each platform’s posting routine and timezone. They may change if another post takes a slot or an upload runs past it. Final dates appear in Schedule.</p><button id="refresh-upload-slots" type="button" class="btn small">Refresh dates</button><label id="upload-manual-date" class="field" hidden>Default publishing date<input id="upload-date" type="datetime-local" value="${localInput(Date.now() + 86400000)}" /><span class="muted">${esc(zone)}. Applies to all files; you can change each date below.</span></label><p class="notice">Files are scheduled automatically after uploading. Keep this tab open until the queue finishes. Your files also stay in the library.</p></div>
+    <div id="upload-files-list"></div>${errorBox}<div class="form-footer"><p id="upload-help">Saved to your library. No publishing date needed.</p><button id="start-upload" class="btn primary" disabled>Upload files</button></div>`,
+  );
+  function defaultPlatform(file) {
+    return (
+      $('#upload-category').value ||
+      (schedule
+        ? file.type.startsWith('image/')
+          ? 'instagram'
+          : 'youtube'
+        : '')
+    );
+  }
+  function renderFiles() {
+    $('#upload-files-list').innerHTML = files
+      .map(
+        (entry, i) => `
+      <section class="${schedule ? 'review-card' : ''}">
+        <div class="upload-file-row">${icon(entry.file.type.startsWith('image/') ? 'image' : 'video')}<div class="file-info"><strong>${esc(entry.file.name)}</strong><small>${size(entry.file.size)}</small></div><select data-file-category="${i}" aria-label="Platform for ${esc(entry.file.name)}">${categoryOptions(entry.category, !schedule)}</select><button type="button" class="icon-btn" data-remove-file="${i}" aria-label="Remove ${esc(entry.file.name)}">✕</button></div>
+        ${
+          schedule
+            ? `${
+                scheduleMode === 'manual'
+                  ? `<label class="field">Publish at<input type="datetime-local" data-upload-field="date" data-file-index="${i}" value="${esc(entry.date)}" required /><span class="muted">${esc(zone)}</span></label>`
+                  : `<div data-upload-slots="${i}" aria-live="polite"><p class="review-date">Finding next available dates…</p></div>`
+              }
+        ${chosenPlatforms(entry.category).includes('youtube') ? `<label class="field">YouTube title<input type="text" data-upload-field="title" data-file-index="${i}" maxlength="100" value="${esc(entry.title)}" required /></label><label class="field">YouTube description<textarea data-upload-field="description" data-file-index="${i}" rows="2">${esc(entry.description)}</textarea></label>` : ''}
+        ${chosenPlatforms(entry.category).includes('instagram') ? `<label class="field">Instagram caption<textarea data-upload-field="caption" data-file-index="${i}" rows="2">${esc(entry.caption)}</textarea></label>` : ''}`
+            : ''
+        }
+      </section>`,
+      )
+      .join('');
+    $('#start-upload').disabled =
+      !files.length || (schedule && scheduleMode === 'auto');
+    $('#start-upload').textContent = schedule
+      ? `Upload & schedule${files.length ? ` ${files.length} file${files.length === 1 ? '' : 's'}` : ''}`
+      : files.length
+        ? `Upload ${files.length} file${files.length === 1 ? '' : 's'}`
+        : 'Upload files';
+    refreshPreviews();
+  }
+  const uploadList = $('#upload-files-list');
+  async function refreshPreviews() {
+    const version = ++previewVersion;
+    previewReady = false;
+    if (!uploadList.isConnected || !$('#dialog').open) return;
+    const automatic = schedule && scheduleMode === 'auto';
+    $('#refresh-upload-slots').hidden = !automatic;
+    if (!automatic || !files.length) return;
+    $('#start-upload').disabled = true;
+    $('#refresh-upload-slots').disabled = true;
+    $$('[data-upload-slots]', uploadList).forEach((el) => {
+      el.innerHTML = '<p class="review-date">Finding next available dates…</p>';
+    });
+    const heldSlots = { youtube: [], instagram: [] };
+    for (const job of uploadJobs) {
+      if (
+        !job.schedule ||
+        !['queued', 'uploading', 'scheduling'].includes(job.status)
+      )
+        continue;
+      if (job.scheduleMode === 'manual') {
+        chosenPlatforms(job.category).forEach((platform) =>
+          heldSlots[platform].push(job.scheduledAt),
+        );
+      } else {
+        for (const slot of job.previewSlots || [])
+          heldSlots[slot.platform].push(slot.scheduledAt);
+      }
+    }
+    const platforms = files.flatMap((entry) => chosenPlatforms(entry.category));
+    const current = () =>
+      version === previewVersion && uploadList.isConnected && $('#dialog').open;
+    try {
+      const { slots } = await api('/api/next-slots', {
+        method: 'POST',
+        body: { platforms, heldSlots },
+      });
+      if (!current()) return;
+      let offset = 0;
+      files.forEach((entry, i) => {
+        entry.previewSlots = slots.slice(
+          offset,
+          offset + chosenPlatforms(entry.category).length,
+        );
+        offset += entry.previewSlots.length;
+        $(`[data-upload-slots="${i}"]`, uploadList).innerHTML =
+          entry.previewSlots
+            .map(
+              (slot) =>
+                `<p class="review-date" data-slot-platform="${slot.platform}" data-slot-date="${slot.scheduledAt}">${icon('calendar')} ${names[slot.platform]} · ${esc(dateText(slot.scheduledAt, slot.timezone))} · ${esc(slot.timezone)}</p>`,
+            )
+            .join('');
+      });
+      previewReady = true;
+      $('#start-upload').disabled = false;
+    } catch (err) {
+      if (!current()) return;
+      $$('[data-upload-slots]', uploadList).forEach((el) => {
+        el.innerHTML = `<p class="notice error">Couldn’t load dates. ${esc(err.message)} Use Refresh dates to try again.</p>`;
+      });
+    } finally {
+      if (current()) $('#refresh-upload-slots').disabled = false;
+    }
+  }
+  $('#refresh-upload-slots').onclick = refreshPreviews;
+  refreshUploadPreview = refreshPreviews;
+  const previewTimer = setInterval(() => {
+    if (!uploadList.isConnected || !$('#dialog').open) {
+      clearInterval(previewTimer);
+      return;
+    }
+    if (!document.hidden) refreshPreviews();
+  }, 30000);
+  function addFiles(incoming) {
+    const errors = [];
+    for (const file of incoming) {
+      if (!/^(video|image)\//.test(file.type)) {
+        errors.push(`${file.name}: choose a video or image.`);
+        continue;
+      }
+      if (
+        state.status?.maxUploadBytes &&
+        file.size > state.status.maxUploadBytes
+      ) {
+        errors.push(
+          `${file.name}: exceeds the ${size(state.status.maxUploadBytes)} upload limit.`,
+        );
+        continue;
+      }
+      files.push({
+        file,
+        category: defaultPlatform(file),
+        date: $('#upload-date').value,
+        title: file.name.replace(/\.[^.]+$/, '').slice(0, 100),
+        description: '',
+        caption: '',
+      });
+    }
+    $('#dialog-error').hidden = !errors.length;
+    if (errors.length) dialogError(errors.join('\n'));
+    renderFiles();
+  }
+  $('#upload-mode').onchange = () => {
+    schedule = $('#upload-mode').value === 'schedule';
+    $('#upload-date-default').hidden = !schedule;
+    $('#upload-help').textContent = schedule
+      ? scheduleMode === 'auto'
+        ? 'We’ll schedule each file in the next available platform slot.'
+        : 'Each file will upload and publish at its chosen time.'
+      : 'Saved to your library. No publishing date needed.';
+    files.forEach((entry) => {
+      if (schedule && !entry.category)
+        entry.category = defaultPlatform(entry.file);
+    });
+    renderFiles();
+  };
+  $('#upload-schedule-mode').onchange = () => {
+    scheduleMode = $('#upload-schedule-mode').value;
+    $('#upload-manual-date').hidden = scheduleMode !== 'manual';
+    $('#upload-next-info').hidden = scheduleMode !== 'auto';
+    $('#refresh-upload-slots').hidden = scheduleMode !== 'auto';
+    $('#upload-mode').onchange();
+  };
+  $('#upload-date').onchange = () => {
+    files.forEach((entry) => {
+      entry.date = $('#upload-date').value;
+    });
+    renderFiles();
+  };
+  $('#upload-files').onchange = (event) => {
+    addFiles([...event.target.files]);
+    event.target.value = '';
+  };
+  $('#upload-category').onchange = () => {
+    files.forEach((entry) => {
+      entry.category = defaultPlatform(entry.file);
+    });
+    renderFiles();
+  };
+  $('#upload-files-list').oninput = (event) => {
+    if (event.target.matches('[data-upload-field]'))
+      files[+event.target.dataset.fileIndex][event.target.dataset.uploadField] =
+        event.target.value;
+  };
+  $('#upload-files-list').onchange = (event) => {
+    if (event.target.matches('[data-file-category]')) {
+      const index = +event.target.dataset.fileCategory;
+      files[index].category = event.target.value;
+      renderFiles();
+      $(`[data-file-category="${index}"]`).focus();
+    }
+  };
+  $('#upload-files-list').onclick = (event) => {
+    const button = event.target.closest('[data-remove-file]');
+    if (button) {
+      files.splice(+button.dataset.removeFile, 1);
+      renderFiles();
+    }
+  };
+  const drop = $('#drop-zone');
+  drop.ondragover = (event) => {
+    event.preventDefault();
+    drop.classList.add('dragging');
+  };
+  drop.ondragleave = () => drop.classList.remove('dragging');
+  drop.ondrop = (event) => {
+    event.preventDefault();
+    drop.classList.remove('dragging');
+    addFiles([...event.dataTransfer.files]);
+  };
+  $('#start-upload').onclick = () => {
+    if (schedule && scheduleMode === 'auto' && !previewReady) return;
+    if (schedule) {
+      for (const field of $$('input, textarea', $('#upload-files-list')))
+        if (!field.reportValidity()) return;
+      for (const entry of files) {
+        if (
+          scheduleMode === 'manual' &&
+          (!Number.isFinite(Date.parse(entry.date)) ||
+            Date.parse(entry.date) <= Date.now())
+        )
+          return dialogError(
+            `${entry.file.name}: choose a publishing time in the future.`,
+          );
+        if (
+          entry.category.includes('youtube') &&
+          !entry.file.type.startsWith('video/')
+        )
+          return dialogError(
+            `${entry.file.name}: YouTube requires a video. Choose Instagram for this image.`,
+          );
+        if (entry.category.includes('youtube') && !entry.title.trim())
+          return dialogError(`${entry.file.name}: add a YouTube title.`);
+      }
+    }
+    files.forEach((entry) =>
+      uploadJobs.push({
+        ...entry,
+        id: uid(),
+        requestId: uid(),
+        schedule,
+        scheduleMode,
+        scheduledAt:
+          schedule && scheduleMode === 'manual'
+            ? new Date(entry.date).toISOString()
+            : null,
+        status: 'queued',
+        progress: 0,
+      }),
+    );
+    closeDialog();
+    if (schedule) {
+      state.postFilter = 'upcoming';
+      $('#post-platform').value = 'all';
+      go('schedule');
+    } else {
+      go('library');
+      resetFilters();
+    }
+    processUploads();
+  };
+  $('#upload-mode').value = scheduleImmediately ? 'schedule' : 'library';
+  $('#upload-mode').onchange();
+  addFiles(initial);
+}
+$('#media-grid').ondragover = (event) => {
+  if (event.dataTransfer.types.includes('Files')) event.preventDefault();
+};
+$('#media-grid').ondrop = (event) => {
+  event.preventDefault();
+  if (event.dataTransfer.files.length)
+    openUpload([...event.dataTransfer.files]);
+};
+function renderUploads() {
+  const panel = $('#upload-progress');
+  panel.hidden = !uploadJobs.length;
+  const unfinished = uploadJobs.filter((job) => job.status !== 'done').length;
+  const pending = uploadJobs.some((job) =>
+    ['queued', 'uploading', 'scheduling'].includes(job.status),
+  );
+  panel.innerHTML = `<header><span>${pending ? 'Finishing your uploads' : unfinished ? 'Some files need attention' : 'Uploads complete'} · ${uploadJobs.filter((j) => j.status === 'done').length}/${uploadJobs.length}</span>${!uploading && !uploadJobs.some((j) => j.status === 'queued') ? '<button class="icon-btn" id="dismiss-uploads" aria-label="Dismiss upload results">✕</button>' : ''}</header><p>${pending ? 'Keep this tab open until uploads and scheduling finish.' : unfinished ? 'Saved files are in your library. Retry any failed steps below.' : 'Files are saved. Scheduled posts are listed in Schedule.'}</p>${uploadJobs.map((job, i) => `<div class="upload-job"><div class="inline"><strong>${esc(job.file.name)}</strong><span>${job.status === 'done' ? (job.schedule ? 'Scheduled ✓' : 'Saved ✓') : job.status === 'scheduling' ? 'Scheduling…' : job.status === 'uploading' ? `${job.progress}%` : job.status === 'error' ? 'Needs attention' : 'Waiting'}</span></div>${job.status === 'uploading' ? `<progress value="${job.progress}" max="100" aria-label="Upload progress for ${esc(job.file.name)}"></progress>` : ''}${job.schedule ? (job.posts?.length ? job.posts.map((post) => `<p>${names[post.targets[0].platform]} · ${esc(dateText(post.scheduled_at))} · ${esc(zone)}</p>`).join('') : `<p>${job.scheduleMode === 'auto' ? (job.previewSlots || []).map((slot) => `Suggested: ${names[slot.platform]} · ${esc(dateText(slot.scheduledAt, slot.timezone))} · ${esc(slot.timezone)}`).join('<br>') || 'Finding next available slot' : `${esc(dateText(job.scheduledAt))} · ${esc(zone)}`}</p>`) : ''}${job.warnings?.length ? `<p>${esc(job.warnings.join(' '))}</p>` : ''}${job.error ? `<p class="post-error">${esc(job.error)}</p><button class="btn small" data-retry-upload="${i}">${job.mediaId ? 'Retry scheduling' : 'Retry upload'}</button>` : ''}</div>`).join('')}`;
+}
+$('#upload-progress').onclick = (event) => {
+  const retry = event.target.closest('[data-retry-upload]');
+  if (retry) {
+    const job = uploadJobs[+retry.dataset.retryUpload];
+    job.status = 'queued';
+    job.error = '';
+    processUploads();
+  }
+  if (event.target.closest('#dismiss-uploads')) {
+    uploadJobs.splice(0);
+    renderUploads();
+  }
+};
+function sendFile(job) {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open('POST', '/api/media');
+    const data = new FormData();
+    data.append('file', job.file);
+    data.append('uploadId', job.id);
+    chosenPlatforms(job.category).forEach((platform) =>
+      data.append('platforms', platform),
+    );
+    xhr.upload.onprogress = (event) => {
+      if (event.lengthComputable) {
+        job.progress = Math.round((event.loaded / event.total) * 100);
+        renderUploads();
+      }
+    };
+    xhr.onload = () => {
+      let body;
+      try {
+        body = JSON.parse(xhr.responseText);
+      } catch {
+        reject(
+          new Error('Unexpected server response. Retry this upload safely.'),
+        );
+        return;
+      }
+      if (xhr.status >= 200 && xhr.status < 300) resolve(body);
+      else reject(new Error(body.error || 'Upload failed. Please retry.'));
+    };
+    xhr.onerror = () =>
+      reject(new Error('Connection lost. Retry to finish this upload safely.'));
+    xhr.onabort = () => reject(new Error('Upload interrupted. Please retry.'));
+    xhr.send(data);
+  });
+}
+async function processUploads() {
+  if (uploading) return;
+  uploading = true;
   try {
     let job;
-    while ((job = uploadQueue.find((item) => item.status === 'queued'))) {
+    while ((job = uploadJobs.find((j) => j.status === 'queued'))) {
       job.status = 'uploading';
-      job.detail = 'Starting upload…';
-      job.progress = 0;
-      renderUploadQueue();
-      const fd = new FormData();
-      fd.append('file', job.file);
-      fd.append('title', job.title);
-      fd.append('description', job.description);
-      fd.append('platforms', job.platform);
-      fd.append('scheduleMode', job.mode);
-      fd.append('scheduledAt', job.scheduledAt);
-      fd.append('uploadId', job.id);
+      renderUploads();
       try {
-        const created = await uploadWithProgress(fd, job);
+        // Retain the saved media ID so scheduling retries never upload the file again.
+        if (!job.mediaId) job.mediaId = (await sendFile(job)).id;
+        if (job.schedule) {
+          job.status = 'scheduling';
+          renderUploads();
+          const result = await api('/api/media/schedule', {
+            method: 'POST',
+            body: {
+              requestId: job.requestId,
+              mode: job.scheduleMode,
+              items: chosenPlatforms(job.category).map((platform) => ({
+                mediaId: job.mediaId,
+                platform,
+                scheduledAt: job.scheduledAt,
+                title: platform === 'youtube' ? job.title.trim() : '',
+                description:
+                  platform === 'youtube' ? job.description : job.caption,
+              })),
+            },
+          });
+          job.posts = result.posts;
+          job.warnings = result.warnings;
+        }
         job.status = 'done';
-        job.scheduledAt = created.scheduled_at;
-        job.detail = `Scheduled ✔${created.warnings?.length ? ' — ' + created.warnings.join(' · ') : ''}`;
-        job.fileName = job.file.name;
-        job.file = null; // release the completed file reference
-      } catch (error) {
-        job.status = 'failed';
-        job.detail = error.message;
+      } catch (err) {
+        job.status = 'error';
+        job.error = job.mediaId
+          ? `File saved, but scheduling was not confirmed. ${err.message} Retry here, or choose another date from the library.`
+          : err.message;
       }
-      renderUploadQueue();
-      // A refresh failure must not turn a successful upload into a failed job.
-      await Promise.allSettled([loadPosts(), loadStatus(), refreshNextSlot()]);
+      await refreshData().catch(() => {});
+      renderUploads();
+      refreshUploadPreview?.();
     }
   } finally {
-    queueRunning = false;
+    uploading = false;
+    renderUploads();
   }
+  refreshStatus().catch(() => {});
 }
-
 window.addEventListener('beforeunload', (event) => {
-  if (uploadQueue.some((job) => job.status !== 'done')) {
+  if (uploadJobs.some((j) => j.status !== 'done') || dialogBusy) {
     event.preventDefault();
     event.returnValue = '';
   }
 });
 
-function uploadWithProgress(fd, job) {
-  return new Promise((resolve, reject) => {
-    const xhr = new XMLHttpRequest();
-    const started = Date.now();
-    xhr.upload.addEventListener('progress', (event) => {
-      if (!event.lengthComputable) return;
-      job.progress = (event.loaded / event.total) * 100;
-      const rate = event.loaded / ((Date.now() - started) / 1000);
-      job.detail = job.progress >= 100 ? 'Upload received; checking file and saving schedule…' :
-        `${job.progress.toFixed(1)}% · ${fmtBytes(event.loaded)} of ${fmtBytes(event.total)} · ${fmtBytes(rate)}/s · ${fmtDuration(rate > 0 ? (event.total - event.loaded) / rate : NaN)} left`;
-      renderUploadQueue();
-    });
-    xhr.addEventListener('load', () => {
-      let data = {};
-      try { data = JSON.parse(xhr.responseText); } catch { /* proxy error */ }
-      if (xhr.status >= 200 && xhr.status < 300) resolve(data);
-      else reject(new Error(data.error || `Request failed (${xhr.status})`));
-    });
-    xhr.addEventListener('error', () => reject(new Error('Connection dropped. Retry to finish this upload safely.')));
-    xhr.addEventListener('abort', () => reject(new Error('Upload cancelled')));
-    xhr.addEventListener('timeout', () => reject(new Error('Upload timed out')));
-    xhr.open('POST', '/api/posts');
-    xhr.timeout = 0;
-    xhr.send(fd);
-  });
-}
-
-function showMsg(text, isError) {
-  msg.hidden = false;
-  msg.textContent = text;
-  msg.className = `form-msg ${isError ? 'err' : 'ok'}`;
-}
-
-$('#storage-clean').addEventListener('click', async (e) => {
-  const btn = e.currentTarget;
-  btn.disabled = true;
-  btn.textContent = 'Cleaning…';
-  try {
-    const r = await api('/api/storage/cleanup', { method: 'POST' });
-    await loadStatus();
-    if (r.count === 0) alert('Nothing removed — the leftover files are still too fresh to be sure they are not uploading.');
-  } catch (err) {
-    alert(err.message);
-  } finally {
-    btn.disabled = false;
-    btn.textContent = 'Clean up';
-  }
-});
-
-/* ---------- post list ---------- */
-
-// Statuses the server lets you edit (mirrors EDITABLE_STATUSES in db.js).
-const EDITABLE = ['scheduled', 'failed', 'partial'];
-
-const PLATFORMS = [
-  { key: 'youtube', label: 'YouTube', box: '#posts-youtube' },
-  { key: 'instagram', label: 'Instagram', box: '#posts-instagram' },
-];
-
-const platformLabel = (key) => PLATFORMS.find((p) => p.key === key)?.label ?? key;
-
-// Instagram posts carry only a caption, so the card names them by its first
-// line instead of showing an empty heading.
-function postHeading(post) {
-  if (post.title) return post.title;
-  const line = (post.description || '').split('\n').map((l) => l.trim()).find(Boolean);
-  if (!line) return '(no caption)';
-  return line.length > 80 ? `${line.slice(0, 79)}…` : line;
-}
-
-// What Instagram will actually show, matching how the scheduler builds it.
-const captionOf = (post) => [post.title, post.description].filter(Boolean).join('\n\n');
-
-// Filters act on the target status for the column the post is rendered in, so
-// a post that published to YouTube but failed on Instagram sits under
-// "Published" in one list and "Failed" in the other.
-const FILTERS = [
-  { key: 'pending', label: 'Pending', empty: 'Nothing pending for', match: (t) => t.status === 'pending' || t.status === 'processing' },
-  { key: 'published', label: 'Published', empty: 'Nothing published to', match: (t) => t.status === 'done' },
-  { key: 'failed', label: 'Failed', empty: 'Nothing failed on', match: (t) => t.status === 'failed' },
-  { key: 'all', label: 'All', empty: 'Nothing scheduled for', match: () => true },
-];
-
-let filterKey = localStorage.getItem('ss-filter') || 'pending';
-if (!FILTERS.some((f) => f.key === filterKey)) filterKey = 'pending';
-
-// Kept so switching filters re-renders instantly instead of refetching.
-let lastPosts = [];
-
-function renderFilterChips() {
-  const box = $('#filter-chips');
-  box.innerHTML = '';
-  for (const f of FILTERS) {
-    const chip = document.createElement('button');
-    chip.type = 'button';
-    chip.className = `chip${f.key === filterKey ? ' is-on' : ''}`;
-    chip.textContent = f.label;
-
-    // A count on each chip means you can see there are failures without
-    // having to click through every filter to find them.
-    const n = lastPosts.reduce((sum, post) => sum + post.targets.filter(f.match).length, 0);
-    if (n > 0 && f.key !== 'all') {
-      const count = document.createElement('span');
-      count.className = 'chip-count';
-      count.textContent = ` ${n}`;
-      chip.appendChild(count);
-    }
-
-    chip.onclick = () => {
-      filterKey = f.key;
-      localStorage.setItem('ss-filter', f.key);
-      editingKey = null; // the card being edited may not survive the new filter
-      renderPosts();
-    };
-    box.appendChild(chip);
-  }
-}
-
-// In a per-platform list the post-level status is the wrong thing to show: a
-// "partial" post is a success in one column and a failure in the other.
-const TARGET_BADGE = {
-  pending: { cls: 'scheduled', text: 'scheduled' },
-  processing: { cls: 'processing', text: 'publishing' },
-  done: { cls: 'done', text: 'published' },
-  failed: { cls: 'failed', text: 'failed' },
-};
-
-// Which card is open in the inline editor, so the 10s refresh doesn't wipe it.
-// Keyed by platform too: a post on both platforms is rendered twice, and only
-// the card you clicked should turn into a form.
-let editingKey = null;
-
-async function loadPosts() {
-  lastPosts = await api('/api/posts');
-  renderPosts();
-  await refreshNextSlot();
-}
-
-function renderPosts() {
-  const filter = FILTERS.find((f) => f.key === filterKey);
-  renderFilterChips();
-
-  for (const { key, label, box } of PLATFORMS) {
-    const el = $(box);
-    const mine = lastPosts.filter((post) => post.targets.some((t) => t.platform === key));
-    const shown = mine.filter((post) => filter.match(post.targets.find((t) => t.platform === key)));
-
-    // Say what the filter is holding back, so an empty list is never a mystery.
-    const hidden = mine.length - shown.length;
-    el.innerHTML = '';
-
-    if (shown.length === 0) {
-      const msg = document.createElement('p');
-      msg.className = 'hint';
-      msg.textContent = hidden > 0
-        ? `${filter.empty} ${label} — ${hidden} hidden by this filter.`
-        : `${filter.empty} ${label}.`;
-      el.appendChild(msg);
-      continue;
-    }
-
-    for (const post of shown) el.appendChild(renderPost(post, key));
-    if (hidden > 0) {
-      const note = document.createElement('p');
-      note.className = 'hint filtered-out';
-      note.textContent = `${hidden} more hidden by the ${filter.label} filter`;
-      el.appendChild(note);
-    }
-  }
-
-  // Bulk-reschedule buttons and any open preview track the same data.
-  for (const { key } of PLATFORMS) reschedUI[key]?.update();
-}
-
-function renderPost(post, platform) {
-  const key = `${post.id}:${platform}`;
-  if (key === editingKey) return renderEditForm(post);
-
-  const target = post.targets.find((t) => t.platform === platform);
-  const badge = TARGET_BADGE[target.status] ?? { cls: '', text: target.status };
-
-  const el = document.createElement('div');
-  el.className = 'post';
-
-  const head = document.createElement('div');
-  head.className = 'post-head';
-  head.innerHTML = `
-    <span class="post-title"></span>
-    <span class="post-time"></span>
-    <span class="badge ${badge.cls}">${badge.text}</span>
-  `;
-  head.querySelector('.post-title').textContent = postHeading(post);
-  head.querySelector('.post-time').textContent = new Date(post.scheduled_at).toLocaleString();
-  el.appendChild(head);
-
-  el.appendChild(renderFileLine(post));
-
-  // The same post can sit in both lists; say so, so deleting from here is no surprise.
-  const others = post.targets.filter((t) => t.platform !== platform);
-  if (others.length > 0) {
-    const note = document.createElement('p');
-    note.className = 'hint post-note';
-    note.textContent = `Also scheduled for ${others.map((t) => platformLabel(t.platform)).join(', ')}`;
-    el.appendChild(note);
-  }
-
-  // Whatever this platform has to say for itself: a link, an error, or nothing yet.
-  if (target.status === 'done' && target.result_url) {
-    const a = document.createElement('a');
-    a.className = 'post-result';
-    a.href = target.result_url;
-    a.target = '_blank';
-    a.rel = 'noopener';
-    a.textContent = target.result_url;
-    el.appendChild(a);
-  } else if (target.status === 'failed') {
-    const err = document.createElement('p');
-    err.className = 'error post-result';
-    err.textContent = target.error || 'failed';
-    el.appendChild(err);
-  }
-
-  const actions = document.createElement('div');
-  actions.className = 'post-actions';
-
-  if (target.status === 'failed') {
-    const retry = document.createElement('button');
-    retry.className = 'btn small';
-    retry.textContent = 'Retry failed';
-    retry.onclick = async () => {
-      await api(`/api/posts/${post.id}/retry`, { method: 'POST' }).catch((e) => alert(e.message));
-      loadPosts();
-    };
-    actions.appendChild(retry);
-  }
-  if (EDITABLE.includes(post.status)) {
-    const edit = document.createElement('button');
-    edit.className = 'btn small';
-    edit.textContent = 'Edit';
-    edit.onclick = () => {
-      editingKey = key;
-      el.replaceWith(renderEditForm(post));
-    };
-    actions.appendChild(edit);
-  }
-  if (post.status !== 'processing') {
-    const del = document.createElement('button');
-    del.className = 'btn small danger';
-    del.textContent = 'Delete';
-    del.onclick = async () => {
-      const also = others.length > 0
-        ? ` This removes it from ${post.targets.map((t) => platformLabel(t.platform)).join(' and ')}.`
-        : '';
-      if (!confirm(`Delete "${post.title}"?${also}`)) return;
-      await api(`/api/posts/${post.id}`, { method: 'DELETE' }).catch((e) => alert(e.message));
-      // Deleting frees the file too, so the disk figures are stale until we refetch.
-      await loadPosts();
-      await loadStatus();
-    };
-    actions.appendChild(del);
-  }
-  if (actions.children.length > 0) el.appendChild(actions);
-
-  return el;
-}
-
-// Which file goes out with this post — a missing one is worth shouting about,
-// since the upload will fail at publish time rather than now.
-function renderFileLine(post) {
-  const line = document.createElement('p');
-  line.className = 'post-file';
-
-  if (post.file_missing) {
-    const gone = document.createElement('span');
-    gone.className = 'error';
-    gone.textContent = `${post.original_name} — file missing from the server`;
-    line.appendChild(gone);
-    return line;
-  }
-
-  const a = document.createElement('a');
-  a.href = `/media/${post.file_name}`;
-  a.target = '_blank';
-  a.rel = 'noopener';
-  a.textContent = post.original_name;
-  line.appendChild(a);
-
-  const meta = document.createElement('span');
-  meta.className = 'post-file-meta';
-  meta.textContent = [
-    Number.isFinite(post.file_size) ? fmtBytes(post.file_size) : null,
-    post.mime_type,
-  ].filter(Boolean).join(' · ');
-  line.appendChild(meta);
-
-  return line;
-}
-
-function renderEditForm(post) {
-  const el = document.createElement('form');
-  el.className = 'post post-edit';
-
-  // An Instagram-only post is edited as the single caption it really is —
-  // including any text that was typed into Title before this was a dropdown.
-  const captionOnly = post.targets.every((t) => t.platform === 'instagram');
-
-  el.innerHTML = `
-    <label${captionOnly ? ' hidden' : ''}>
-      Title
-      <input type="text" name="title" maxlength="100" />
-    </label>
-    <label>
-      ${captionOnly ? 'Caption' : 'Description'}
-      <textarea name="description" rows="3" maxlength="${captionOnly ? 2200 : 5000}"></textarea>
-    </label>
-    <label class="edit-when">
-      Publish at
-      <input type="datetime-local" name="scheduledAt" required />
-    </label>
-    <p class="hint edit-file"></p>
-    <div class="post-actions">
-      <button type="submit" class="btn small primary">Save</button>
-      <button type="button" class="btn small" data-cancel>Cancel</button>
-      <span class="form-msg err" hidden></span>
-    </div>
-  `;
-  const fields = {
-    title: el.querySelector('[name="title"]'),
-    description: el.querySelector('[name="description"]'),
-    scheduledAt: el.querySelector('[name="scheduledAt"]'),
-  };
-  fields.title.value = post.title;
-  fields.description.value = captionOnly ? captionOf(post) : (post.description || '');
-  fields.scheduledAt.value = toLocalInput(post.scheduled_at);
-  // The file itself can't be swapped — re-upload for that — so say which one this edits.
-  el.querySelector('.edit-file').textContent = `File: ${post.original_name} (unchanged)`;
-
-  const err = el.querySelector('.form-msg');
-  const close = async () => {
-    editingKey = null;
-    await loadPosts();
-  };
-
-  el.querySelector('[data-cancel]').onclick = close;
-  el.addEventListener('submit', async (e) => {
-    e.preventDefault();
-    err.hidden = true;
-    const save = el.querySelector('button[type="submit"]');
-    save.disabled = true;
-    save.textContent = 'Saving…';
+function openMedia(id) {
+  const media = state.media.find((m) => m.id === id);
+  if (!media) return;
+  const url = `/media/${encodeURIComponent(media.file_name)}`;
+  showDialog(
+    media.original_name,
+    'FILE DETAILS',
+    `<div class="media-preview">${media.file_missing ? '<p class="notice error">This file is missing from storage.</p>' : media.mime_type.startsWith('video/') ? `<video controls preload="metadata" src="${url}"></video>` : `<img src="${url}" alt="${esc(media.original_name)}" />`}</div><p class="file-meta">${size(media.file_size)} · ${media.post_count ? `Used in ${media.post_count} post(s)` : 'Not scheduled yet'}</p><form id="media-form"><label class="field">Platform category<select name="category">${categoryOptions(categoryValue(media.platforms))}</select></label><label class="field">Default YouTube title<input name="title" maxlength="100" value="${esc(media.title)}" /></label><label class="field">Default caption / description<textarea name="description" rows="3">${esc(media.description)}</textarea><span class="muted">Used as a starting point for new posts. Existing posts keep their own text.</span></label>${errorBox}<div class="form-footer"><button class="btn danger small" type="button" id="delete-media">Delete file</button><div class="inline"><button type="submit" class="btn" id="save-media">Save details</button><button type="button" class="btn primary" id="schedule-media" ${media.file_missing ? 'disabled' : ''}>Save & schedule</button></div></div></form>`,
+  );
+  async function save(schedule) {
+    if (!$('#media-form').reportValidity()) return;
+    const form = $('#media-form');
+    busyDialog(true);
+    $('#save-media').disabled = true;
+    $('#schedule-media').disabled = true;
     try {
-      await api(`/api/posts/${post.id}`, {
+      await api(`/api/media/${id}`, {
         method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          // Caption-only posts fold everything into the description, so the
-          // text in the box is exactly what gets published.
-          title: captionOnly ? '' : fields.title.value,
-          description: fields.description.value,
-          scheduledAt: new Date(fields.scheduledAt.value).toISOString(),
-        }),
+        body: {
+          title: form.elements.title.value,
+          description: form.elements.description.value,
+          platforms: chosenPlatforms(form.elements.category.value),
+        },
       });
-      await close();
-    } catch (e2) {
-      err.hidden = false;
-      err.textContent = e2.message;
-      save.disabled = false;
-      save.textContent = 'Save';
+      await refreshData();
+      busyDialog(false);
+      closeDialog();
+      if (schedule) openSchedule([id]);
+      else toast('File details saved.');
+    } catch (err) {
+      dialogError(err.message);
+    } finally {
+      busyDialog(false);
+      if ($('#save-media')) {
+        $('#save-media').disabled = false;
+        $('#schedule-media').disabled = media.file_missing;
+      }
     }
-  });
-
-  return el;
-}
-
-/* ---------- reschedule all ---------- */
-
-// "3× per week" and friends map onto a spread of weekdays; the checkboxes stay
-// editable for people whose week doesn't match ours.
-const DAY_NAMES = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
-const DAY_ORDER = [1, 2, 3, 4, 5, 6, 0]; // the checkbox row runs Mon..Sun
-const CADENCE_DAYS = {
-  1: [6],
-  2: [2, 6],
-  3: [1, 3, 5],
-  4: [0, 1, 3, 5],
-  5: [1, 2, 3, 4, 5],
-  6: [1, 2, 3, 4, 5, 6],
-  7: [0, 1, 2, 3, 4, 5, 6],
-};
-
-const ORDER_SORTS = {
-  keep: { label: 'Keep current order', sort: (posts) => posts },
-  oldest: {
-    label: 'Oldest upload first',
-    sort: (posts) => [...posts].sort((a, b) => a.created_at.localeCompare(b.created_at) || a.id - b.id),
-  },
-  newest: {
-    label: 'Newest upload first',
-    sort: (posts) => [...posts].sort((a, b) => b.created_at.localeCompare(a.created_at) || b.id - a.id),
-  },
-  shuffle: { label: 'Shuffle', sort: null }, // stable per-panel shuffle, handled in update()
-};
-
-// Only posts still waiting to go out can be bulk-moved; soonest first, so the
-// publish order you already arranged is what gets re-spaced.
-const reschedulable = (platform) =>
-  lastPosts
-    .filter((p) => p.status === 'scheduled' && p.targets.some((t) => t.platform === platform && t.status === 'pending'))
-    .sort((a, b) => a.scheduled_at.localeCompare(b.scheduled_at) || a.id - b.id);
-
-// One future Date per post: walk forward from the start date, taking every
-// ticked weekday at the chosen time and skipping anything already in the past.
-function computeSlots(count, days, time, startStr) {
-  if (days.length === 0 || !/^\d{2}:\d{2}/.test(time || '')) return null;
-  const cur = new Date(`${startStr}T00:00:00`);
-  if (Number.isNaN(cur.getTime())) return null;
-  const [h, m] = time.split(':').map(Number);
-  cur.setHours(h, m, 0, 0);
-  const now = Date.now();
-  const slots = [];
-  while (slots.length < count) {
-    if (days.includes(cur.getDay()) && cur.getTime() > now) slots.push(new Date(cur));
-    cur.setDate(cur.getDate() + 1);
   }
-  return slots;
+  $('#media-form').onsubmit = (event) => {
+    event.preventDefault();
+    save(false);
+  };
+  $('#schedule-media').onclick = () => save(true);
+  $('#delete-media').onclick = () =>
+    confirmDelete(
+      'Delete this file?',
+      `“${media.original_name}” will be permanently removed from your library and storage.`,
+      async () => {
+        await api(`/api/media/${id}`, { method: 'DELETE' });
+        await refreshData();
+      },
+      media.post_count
+        ? 'This file is used by scheduled or published posts. Remove those posts from Schedule before deleting the file.'
+        : null,
+    );
+}
+function confirmDelete(title, copy, action, blocked = null) {
+  showDialog(
+    title,
+    'REMOVE CONTENT',
+    `<p class="dialog-copy">${esc(copy)}</p>${blocked ? `<p class="notice">${esc(blocked)}</p>` : ''}${errorBox}<div class="form-footer"><button class="btn" id="cancel-delete">Cancel</button>${!blocked ? '<button class="btn danger" id="confirm-delete">Delete</button>' : ''}</div>`,
+  );
+  $('#cancel-delete').onclick = closeDialog;
+  if ($('#confirm-delete'))
+    $('#confirm-delete').onclick = async () => {
+      busyDialog(true);
+      $('#confirm-delete').disabled = true;
+      try {
+        await action();
+        busyDialog(false);
+        closeDialog();
+        toast('Removed successfully.');
+      } catch (err) {
+        dialogError(err.message);
+      } finally {
+        busyDialog(false);
+        if ($('#confirm-delete')) $('#confirm-delete').disabled = false;
+      }
+    };
+}
+$('#categorize-selected').onclick = () => {
+  const ids = [...state.selected];
+  showDialog(
+    `Organize ${ids.length} file${ids.length === 1 ? '' : 's'}`,
+    'PLATFORM CATEGORIES',
+    `<p class="dialog-copy">Choose a platform category. Categorizing a file doesn’t schedule a post.</p><label class="field">Platform<select id="batch-category">${categoryOptions()}</select></label>${errorBox}<div class="form-footer"><p>Applies to all selected files.</p><button class="btn primary" id="save-category">Save category</button></div>`,
+  );
+  $('#save-category').onclick = async () => {
+    busyDialog(true);
+    $('#save-category').disabled = true;
+    try {
+      const platforms = chosenPlatforms($('#batch-category').value);
+      const results = await Promise.allSettled(
+        ids.map((id) =>
+          api(`/api/media/${id}`, { method: 'PATCH', body: { platforms } }),
+        ),
+      );
+      await refreshData();
+      const failed = results.filter((r) => r.status === 'rejected');
+      if (failed.length)
+        throw new Error(
+          `${failed.length} file(s) could not be updated. ${failed[0].reason.message}`,
+        );
+      busyDialog(false);
+      closeDialog();
+      toast('Categories updated.');
+    } catch (err) {
+      dialogError(err.message);
+    } finally {
+      busyDialog(false);
+      if ($('#save-category')) $('#save-category').disabled = false;
+    }
+  };
+};
+
+function openSchedule(ids) {
+  const media = ids
+    .map((id) => state.media.find((m) => m.id === id))
+    .filter(Boolean);
+  if (!media.length) return;
+  if (media.length > 50) return toast('Select up to 50 files at a time.', true);
+  let mode = 'next',
+    manualDate = localInput(Date.now() + 86400000),
+    spacing = '1';
+  const categories = new Map(
+    media.map((m) => [
+      m.id,
+      categoryValue(m.platforms) ||
+        (m.mime_type.startsWith('image/') ? 'instagram' : 'youtube'),
+    ]),
+  );
+  let reviewed = [],
+    draftItems = null,
+    requestId = uid();
+  function configure() {
+    showDialog(
+      `Schedule ${media.length === 1 ? 'your file' : `${media.length} files`}`,
+      '1 OF 2 · PLATFORM & DATES',
+      `<p class="dialog-copy">Choose a platform for each file, then review dates and write your post text.</p><div>${media.map((m) => `<div class="upload-file-row"><div class="file-info"><strong>${esc(m.original_name)}</strong><small>${m.post_count ? `Already used in ${m.post_count} post(s). This creates a new post.` : 'Not scheduled yet'}</small></div><select data-schedule-platform="${m.id}" aria-label="Publish ${esc(m.original_name)} to">${categoryOptions(categories.get(m.id), false)}</select></div>`).join('')}</div><label class="field">Publishing time<select id="schedule-mode"><option value="next" ${mode === 'next' ? 'selected' : ''}>Use next available posting slots</option><option value="manual" ${mode === 'manual' ? 'selected' : ''}>Choose a date and time</option></select></label><p id="next-explainer" class="notice" ${mode !== 'next' ? 'hidden' : ''}>Each file gets its own available day for that platform, following your posting routine in Settings.</p><div id="manual-fields" ${mode !== 'manual' ? 'hidden' : ''}><div class="field-row"><label class="field">First publishing time<input id="manual-date" type="datetime-local" value="${manualDate}" required /></label><label class="field">Days between files<input id="manual-spacing" type="number" min="1" max="365" value="${spacing}" required /></label></div><p class="muted">Times are in ${esc(zone)}. Files going to both platforms share the same time.</p></div>${errorBox}<div class="form-footer"><p>You’ll confirm everything on the next step.</p><button class="btn primary" id="review-schedule">Review schedule →</button></div>`,
+      true,
+    );
+    $('#schedule-mode').onchange = () => {
+      mode = $('#schedule-mode').value;
+      $('#manual-fields').hidden = mode !== 'manual';
+      $('#next-explainer').hidden = mode !== 'next';
+    };
+    $$('[data-schedule-platform]').forEach((el) => {
+      el.onchange = () =>
+        categories.set(+el.dataset.schedulePlatform, el.value);
+    });
+    $('#review-schedule').onclick = async () => {
+      mode = $('#schedule-mode').value;
+      manualDate = $('#manual-date').value;
+      spacing = $('#manual-spacing').value;
+      if (
+        mode === 'manual' &&
+        (!$('#manual-date').reportValidity() ||
+          !$('#manual-spacing').reportValidity())
+      )
+        return;
+      const items = [];
+      for (const [i, m] of media.entries()) {
+        if (!categories.get(m.id))
+          return dialogError('Choose a publishing platform for every file.');
+        for (const platform of chosenPlatforms(categories.get(m.id))) {
+          const date = new Date(manualDate);
+          date.setDate(date.getDate() + i * Number(spacing));
+          const draft = draftItems?.find(
+            (item) => item.mediaId === m.id && item.platform === platform,
+          );
+          items.push({
+            mediaId: m.id,
+            platform,
+            ...(draft
+              ? { title: draft.title, description: draft.description }
+              : {}),
+            ...(mode === 'manual' ? { scheduledAt: date.toISOString() } : {}),
+          });
+        }
+      }
+      busyDialog(true);
+      $('#review-schedule').disabled = true;
+      try {
+        const result = await api('/api/media/schedule/preview', {
+          method: 'POST',
+          body: { mode, items },
+        });
+        reviewed = result.items;
+        requestId = uid();
+        busyDialog(false);
+        review();
+      } catch (err) {
+        dialogError(err.message);
+      } finally {
+        busyDialog(false);
+        if ($('#review-schedule')) $('#review-schedule').disabled = false;
+      }
+    };
+  }
+  function capture() {
+    reviewed = reviewed.map((item, i) => ({
+      ...item,
+      title: $(`[data-review-title="${i}"]`)?.value ?? item.title,
+      description: $(`[data-review-description="${i}"]`).value,
+    }));
+    draftItems = reviewed;
+  }
+  function review() {
+    const disconnected = [...new Set(reviewed.map((r) => r.platform))].filter(
+      (p) =>
+        state.status && (!state.status[p].connected || state.status[p].error),
+    );
+    showDialog(
+      'Review posts',
+      '2 OF 2 · REVIEW & SCHEDULE',
+      `<p class="dialog-copy">${reviewed.length} post${reviewed.length === 1 ? '' : 's'} to review. Original files remain in the library.</p>${disconnected.length ? `<p class="notice">${disconnected.map((p) => names[p]).join(' and ')} ${disconnected.length === 1 ? 'needs' : 'need'} to be connected in Settings before publishing.</p>` : ''}<form id="confirm-schedule-form">${reviewed.map((item, i) => `<section class="review-card"><div class="review-heading"><strong>${esc(item.originalName)}</strong>${badge(item.platform)}</div><div class="review-date">${icon('calendar')} ${esc(dateText(item.scheduledAt, item.timezone || zone))} · ${esc(item.timezone || zone)}</div>${item.platform === 'youtube' ? `<label class="field">YouTube title<input data-review-title="${i}" maxlength="100" required value="${esc(item.title)}" /></label>` : ''}<label class="field">${item.platform === 'youtube' ? 'Description' : 'Instagram caption'}<textarea data-review-description="${i}" rows="2">${esc(item.description)}</textarea></label></section>`).join('')}${reviewed.some((r) => r.platform === 'instagram') ? '<p class="muted">Instagram files are checked for publishing compatibility when you confirm.</p>' : ''}${errorBox}<div class="form-footer"><button type="button" class="btn" id="back-schedule">← Back</button><button type="submit" class="btn primary" id="confirm-schedule">Schedule ${reviewed.length} post${reviewed.length === 1 ? '' : 's'}</button></div></form>`,
+      true,
+    );
+    $('#back-schedule').onclick = () => {
+      capture();
+      configure();
+    };
+    $('#confirm-schedule-form').onsubmit = async (event) => {
+      event.preventDefault();
+      capture();
+      busyDialog(true);
+      $('#confirm-schedule').disabled = true;
+      $('#back-schedule').disabled = true;
+      $('#confirm-schedule').textContent = 'Checking & scheduling…';
+      try {
+        const result = await api('/api/media/schedule', {
+          method: 'POST',
+          body: { requestId, mode, items: reviewed },
+        });
+        state.selected.clear();
+        busyDialog(false);
+        closeDialog();
+        go('schedule');
+        state.postFilter = 'upcoming';
+        await refreshData();
+        toast(
+          `${result.posts.length} post${result.posts.length === 1 ? '' : 's'} scheduled. Your files are saved in the library.`,
+        );
+        if (result.warnings.length)
+          showDialog(
+            'Posts scheduled.',
+            'MEDIA NOTES',
+            `<p class="notice">${esc(result.warnings.join('\n'))}</p><p class="dialog-copy">These notes don’t prevent your posts from publishing.</p>`,
+          );
+      } catch (err) {
+        dialogError(
+          `${err.message}\nIf a slot is no longer available, go back and review fresh dates. Your files remain in the library.`,
+        );
+      } finally {
+        busyDialog(false);
+        if ($('#confirm-schedule')) {
+          $('#confirm-schedule').disabled = false;
+          $('#confirm-schedule').textContent =
+            `Schedule ${reviewed.length} posts`;
+          $('#back-schedule').disabled = false;
+        }
+      }
+    };
+  }
+  configure();
 }
 
-const fmtSlot = (d) =>
-  d.toLocaleString(undefined, { weekday: 'short', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
-const fmtDay = (d) => d.toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' });
-
-const reschedUI = {};
-
-function initResched(platform) {
-  const btn = $(`#resched-btn-${platform}`);
-  const panel = $(`#resched-${platform}`);
-  let saved = {};
-  try { saved = JSON.parse(localStorage.getItem(`ss-resched-${platform}`)) || {}; } catch { /* stale */ }
-
-  panel.innerHTML = `
-    <form>
-      <div class="row">
-        <label>How often
-          <select name="cadence">
-            ${[1, 2, 3, 4, 5, 6, 7].map((n) => `<option value="${n}">${n === 7 ? 'Every day' : `${n}\u00d7 per week`}</option>`).join('')}
-            <option value="custom">Custom days</option>
-          </select>
-        </label>
-        <label>Post at
-          <input type="time" name="time" required />
-        </label>
-        <label>Starting
-          <input type="date" name="start" required />
-        </label>
-      </div>
-      <fieldset class="resched-days">
-        <legend>On days</legend>
-        ${DAY_ORDER.map((d) => `<label class="day-pick"><input type="checkbox" value="${d}" />${DAY_NAMES[d]}</label>`).join('')}
-      </fieldset>
-      <div class="row">
-        <label class="resched-order">Order
-          <select name="order">
-            ${Object.entries(ORDER_SORTS).map(([k, o]) => `<option value="${k}">${o.label}</option>`).join('')}
-          </select>
-        </label>
-        <button type="button" class="btn small" data-reshuffle hidden>Shuffle again</button>
-      </div>
-      <div class="resched-preview"></div>
-      <p class="hint resched-summary"></p>
-      <p class="hint resched-warn error" hidden></p>
-      <div class="post-actions">
-        <button type="submit" class="btn small primary" data-apply>Apply new schedule</button>
-        <button type="button" class="btn small" data-close>Cancel</button>
-        <span class="form-msg err" hidden></span>
-      </div>
-    </form>
-  `;
-
-  const el = (sel) => panel.querySelector(sel);
-  const els = {
-    form: el('form'),
-    cadence: el('[name="cadence"]'),
-    time: el('[name="time"]'),
-    start: el('[name="start"]'),
-    order: el('[name="order"]'),
-    days: [...panel.querySelectorAll('.resched-days input')],
-    reshuffle: el('[data-reshuffle]'),
-    preview: el('.resched-preview'),
-    summary: el('.resched-summary'),
-    warn: el('.resched-warn'),
-    apply: el('[data-apply]'),
-    msg: el('.form-msg'),
+const statusLabels = {
+  scheduled: 'Scheduled',
+  processing: 'Publishing',
+  done: 'Published',
+  failed: 'Failed',
+  partial: 'Needs attention',
+  pending: 'Scheduled',
+};
+const matchesPost = (post, filter) =>
+  filter === 'all' ||
+  (filter === 'upcoming'
+    ? ['scheduled', 'processing'].includes(post.status)
+    : filter === 'attention'
+      ? ['failed', 'partial'].includes(post.status)
+      : post.status === 'done');
+function renderPosts() {
+  const upcoming = state.posts.filter((p) => matchesPost(p, 'upcoming')).length;
+  $('#schedule-count').textContent = upcoming;
+  $('#schedule-summary').innerHTML =
+    summary(upcoming, 'Posts coming up', 'calendar') +
+    summary(
+      state.posts.filter((p) => p.status === 'done').length,
+      'Published posts',
+      'check',
+    ) +
+    summary(
+      state.posts.filter((p) => matchesPost(p, 'attention')).length,
+      'Need your attention',
+      'clock',
+    );
+  $('#post-tabs').innerHTML = [
+    ['upcoming', 'Upcoming'],
+    ['done', 'Published'],
+    ['attention', 'Needs attention'],
+    ['all', 'All posts'],
+  ]
+    .map(
+      ([key, label]) =>
+        `<button data-post-filter="${key}" class="${state.postFilter === key ? 'active' : ''}" aria-pressed="${state.postFilter === key}">${label}<span>${state.posts.filter((p) => matchesPost(p, key)).length}</span></button>`,
+    )
+    .join('');
+  $('#schedule-timezone').textContent = `All times shown in ${zone}`;
+  const platform = $('#post-platform').value;
+  const posts = state.posts.filter(
+    (p) =>
+      matchesPost(p, state.postFilter) &&
+      (platform === 'all' || p.targets.some((t) => t.platform === platform)),
+  );
+  $('#bulk-reschedule').hidden = !state.posts.some(
+    (p) =>
+      p.status === 'scheduled' &&
+      (platform === 'all' || p.targets.some((t) => t.platform === platform)),
+  );
+  let lastDay = '';
+  $('#post-list').innerHTML = posts.length
+    ? posts
+        .map((post) => {
+          const day = new Date(post.scheduled_at).toLocaleDateString(
+            undefined,
+            { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' },
+          );
+          const heading =
+            day !== lastDay ? `<div class="post-day">${esc(day)}</div>` : '';
+          lastDay = day;
+          const editable = ['scheduled', 'failed', 'partial'].includes(
+            post.status,
+          );
+          return `${heading}<article class="post-card"><div class="post-time">${new Date(post.scheduled_at).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })}</div><div class="post-content"><h3>${esc(post.title || post.description.split('\n')[0] || post.original_name)}</h3><p class="muted${post.file_missing ? ' missing' : ''}">${esc(post.original_name)} · ${size(post.file_size)}</p><div class="badges" style="margin-top:8px">${post.targets.map((target) => `${badge(target.platform)}<span class="badge ${target.status === 'pending' ? 'scheduled' : target.status}">${statusLabels[target.status]}</span>${target.result_url && /^https?:\/\//i.test(target.result_url) ? `<a class="badge" href="${esc(target.result_url)}" target="_blank" rel="noopener noreferrer">View post ↗</a>` : ''}`).join('')}</div>${post.targets
+            .filter((t) => t.error)
+            .map(
+              (t) =>
+                `<p class="post-error">${names[t.platform]}: ${esc(t.error)}</p>`,
+            )
+            .join(
+              '',
+            )}</div><div class="post-actions">${['failed', 'partial'].includes(post.status) ? `<button class="btn small" data-retry-post="${post.id}">Retry failed</button>` : ''}${editable ? `<button class="btn small" data-edit-post="${post.id}">Edit post</button>` : ''}${post.status !== 'processing' ? `<button class="btn small text" data-delete-post="${post.id}">Remove</button>` : ''}</div></article>`;
+        })
+        .join('')
+    : empty(
+        state.postFilter === 'upcoming'
+          ? 'No upcoming posts'
+          : 'No posts here yet.',
+        state.postFilter === 'upcoming'
+          ? 'Upload a file or select one from the library to schedule a post.'
+          : 'Posts will appear here as their status changes.',
+        'pick-media',
+        'Choose from library',
+        'calendar',
+      );
+}
+$('#post-tabs').onclick = (event) => {
+  const button = event.target.closest('[data-post-filter]');
+  if (button) {
+    state.postFilter = button.dataset.postFilter;
+    renderPosts();
+  }
+};
+$('#post-platform').onchange = renderPosts;
+$('#post-list').onclick = async (event) => {
+  const edit = event.target.closest('[data-edit-post]'),
+    remove = event.target.closest('[data-delete-post]'),
+    retry = event.target.closest('[data-retry-post]');
+  if (edit) editPost(+edit.dataset.editPost);
+  if (remove) {
+    const post = state.posts.find((p) => p.id === +remove.dataset.deletePost);
+    const retained =
+      state.media.some((m) => m.file_name === post.file_name) ||
+      state.posts.some(
+        (p) => p.id !== post.id && p.file_name === post.file_name,
+      );
+    confirmDelete(
+      'Remove this post?',
+      `${post.status === 'done' ? 'This removes its local history; the published post stays on the platform.' : 'This removes the post from your schedule.'} ${retained ? 'Your file will remain available in the library or other posts.' : 'The associated upload will also be deleted.'}`,
+      async () => {
+        await api(`/api/posts/${post.id}`, { method: 'DELETE' });
+        await refreshData();
+      },
+    );
+  }
+  if (retry) {
+    retry.disabled = true;
+    try {
+      await api(`/api/posts/${retry.dataset.retryPost}/retry`, {
+        method: 'POST',
+      });
+      await refreshData();
+      toast(
+        'Failed targets queued to retry. Past-due posts publish on the next scheduler check.',
+      );
+    } catch (err) {
+      toast(err.message, true);
+      retry.disabled = false;
+    }
+  }
+};
+function editPost(id) {
+  const post = state.posts.find((p) => p.id === id);
+  const youtube = post.targets.some((t) => t.platform === 'youtube');
+  showDialog(
+    'Edit post',
+    'EDIT SCHEDULED POST',
+    `<p class="dialog-copy">${esc(post.original_name)}</p><form id="edit-post-form">${youtube ? `<label class="field">YouTube title<input name="title" maxlength="100" required value="${esc(post.title)}" /></label>` : ''}<label class="field">${youtube ? 'Description' : 'Instagram caption'}<textarea name="description">${esc(youtube ? post.description : [post.title, post.description].filter(Boolean).join('\n\n'))}</textarea></label><label class="field">Publish at<input name="scheduledAt" type="datetime-local" required value="${localInput(post.scheduled_at)}" /><span class="muted">${esc(zone)}. Past-due scheduled posts publish on the next check.</span></label>${['failed', 'partial'].includes(post.status) ? '<p class="notice">Saving changes keeps the failed status. Use “Retry failed” when you’re ready to publish.</p>' : ''}${errorBox}<div class="form-footer"><button type="button" class="btn" id="cancel-edit">Cancel</button><button class="btn primary" id="save-post">Save changes</button></div></form>`,
+  );
+  $('#cancel-edit').onclick = closeDialog;
+  $('#edit-post-form').onsubmit = async (event) => {
+    event.preventDefault();
+    const form = event.target;
+    busyDialog(true);
+    $('#save-post').disabled = true;
+    try {
+      await api(`/api/posts/${id}`, {
+        method: 'PATCH',
+        body: {
+          title: youtube ? form.elements.title.value : '',
+          description: form.elements.description.value,
+          scheduledAt: new Date(form.elements.scheduledAt.value).toISOString(),
+        },
+      });
+      await refreshData();
+      busyDialog(false);
+      closeDialog();
+      toast('Post updated.');
+    } catch (err) {
+      dialogError(err.message);
+    } finally {
+      busyDialog(false);
+      if ($('#save-post')) $('#save-post').disabled = false;
+    }
   };
-
-  const setDays = (days) => els.days.forEach((c) => { c.checked = days.includes(Number(c.value)); });
-  els.cadence.value = String(saved.cadence ?? 3);
-  if (!els.cadence.value) els.cadence.value = '3'; // saved value is no longer an option
-  els.time.value = saved.time || '18:00';
-  els.order.value = saved.order && ORDER_SORTS[saved.order] ? saved.order : 'keep';
-  setDays(Array.isArray(saved.days) ? saved.days : CADENCE_DAYS[3]);
-
-  const shuffleRank = new Map();
-  let pending = []; // the { id, scheduledAt } changes the preview currently shows
-
-  function update() {
-    const posts = reschedulable(platform);
-    btn.hidden = posts.length === 0;
-    if (posts.length === 0) panel.hidden = true;
-    if (panel.hidden) return;
-
-    const days = els.days.filter((c) => c.checked).map((c) => Number(c.value));
-    const slots = computeSlots(posts.length, days, els.time.value, els.start.value);
-    els.apply.disabled = !slots;
-    els.reshuffle.hidden = els.order.value !== 'shuffle';
-    if (!slots) {
-      pending = [];
-      els.preview.innerHTML = '';
-      els.summary.textContent = 'Tick at least one day (and set a time and start date) to see the new schedule.';
-      els.warn.hidden = true;
+}
+$('#bulk-reschedule').onclick = () => {
+  const platform = $('#post-platform').value;
+  const posts = state.posts.filter(
+    (p) =>
+      p.status === 'scheduled' &&
+      (platform === 'all' || p.targets.some((t) => t.platform === platform)),
+  );
+  let changes = [];
+  showDialog(
+    `Reschedule ${posts.length} upcoming posts`,
+    'RESCHEDULE POSTS',
+    `<p class="dialog-copy">Spread upcoming posts across new dates, in their current order. Times use ${esc(zone)}.</p><form id="bulk-form"><div class="field-row"><label class="field">First publishing time<input id="bulk-date" type="datetime-local" required value="${localInput(Date.now() + 86400000)}" /></label><label class="field">Days between posts<input id="bulk-spacing" type="number" min="1" max="365" required value="1" /></label></div><div id="bulk-preview"></div>${errorBox}<div class="form-footer"><button type="button" class="btn" id="cancel-bulk">Cancel</button><button class="btn primary" id="save-bulk">Save new dates</button></div></form>`,
+  );
+  function preview() {
+    const start = new Date($('#bulk-date').value);
+    const spacing = Number($('#bulk-spacing').value);
+    if (!Number.isFinite(start.getTime()) || spacing < 1) {
+      changes = [];
       return;
     }
-
-    let ordered;
-    if (els.order.value === 'shuffle') {
-      for (const p of posts) if (!shuffleRank.has(p.id)) shuffleRank.set(p.id, Math.random());
-      ordered = [...posts].sort((a, b) => shuffleRank.get(a.id) - shuffleRank.get(b.id));
-    } else {
-      ordered = ORDER_SORTS[els.order.value].sort(posts);
-    }
-    pending = ordered.map((p, i) => ({ id: p.id, scheduledAt: slots[i].toISOString() }));
-
-    els.preview.innerHTML = '';
-    ordered.forEach((p, i) => {
-      const row = document.createElement('div');
-      row.className = 'resched-line';
-      const name = document.createElement('span');
-      name.className = 'resched-name';
-      name.textContent = postHeading(p);
-      const when = document.createElement('span');
-      when.className = 'resched-when';
-      when.append(`${fmtSlot(new Date(p.scheduled_at))} \u2192 `);
-      const b = document.createElement('b');
-      b.textContent = fmtSlot(slots[i]);
-      when.append(b);
-      row.append(name, when);
-      els.preview.appendChild(row);
+    changes = posts.map((p, i) => {
+      const date = new Date(start);
+      date.setDate(date.getDate() + i * spacing);
+      return { id: p.id, scheduledAt: date.toISOString() };
     });
-
-    els.summary.textContent =
-      `${posts.length} post${posts.length === 1 ? '' : 's'} \u00b7 ${days.length}\u00d7 per week \u00b7 ` +
-      (posts.length === 1 ? `lands ${fmtDay(slots[0])}` : `${fmtDay(slots[0])} \u2013 ${fmtDay(slots[slots.length - 1])}`);
-
-    const elsewhere = ordered.filter((p) => p.targets.some((t) => t.platform !== platform)).length;
-    els.warn.hidden = elsewhere === 0;
-    if (elsewhere > 0) {
-      els.warn.textContent = `${elsewhere} of these also target another platform and will move there too.`;
-    }
+    $('#bulk-preview').innerHTML = changes
+      .map(
+        (c, i) =>
+          `<div class="review-date">${esc(posts[i].title || posts[i].original_name)} → ${esc(dateText(c.scheduledAt))}</div>`,
+      )
+      .join('');
   }
-
-  els.cadence.addEventListener('change', () => {
-    if (els.cadence.value !== 'custom') setDays(CADENCE_DAYS[Number(els.cadence.value)]);
-    update();
-  });
-  for (const c of els.days) {
-    c.addEventListener('change', () => {
-      els.cadence.value = 'custom';
-      update();
-    });
-  }
-  for (const input of [els.time, els.start, els.order]) input.addEventListener('change', update);
-  els.reshuffle.addEventListener('click', () => { shuffleRank.clear(); update(); });
-
-  btn.addEventListener('click', () => {
-    panel.hidden = !panel.hidden;
-    if (!panel.hidden) {
-      els.start.value = toLocalInput(new Date()).slice(0, 10);
-      els.msg.hidden = true;
-      update();
-    }
-  });
-  el('[data-close]').addEventListener('click', () => { panel.hidden = true; });
-
-  els.form.addEventListener('submit', async (e) => {
-    e.preventDefault();
-    if (pending.length === 0) return;
-    els.msg.hidden = true;
-    els.apply.disabled = true;
-    els.apply.textContent = 'Applying\u2026';
+  $('#bulk-date').oninput = preview;
+  $('#bulk-spacing').oninput = preview;
+  preview();
+  $('#cancel-bulk').onclick = closeDialog;
+  $('#bulk-form').onsubmit = async (event) => {
+    event.preventDefault();
+    preview();
+    if (!changes.length || Date.parse(changes[0].scheduledAt) <= Date.now())
+      return dialogError('Choose a first publishing time in the future.');
+    busyDialog(true);
+    $('#save-bulk').disabled = true;
     try {
-      const r = await api('/api/posts/reschedule', {
+      const result = await api('/api/posts/reschedule', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ changes: pending }),
+        body: { changes },
       });
-      localStorage.setItem(`ss-resched-${platform}`, JSON.stringify({
-        cadence: els.cadence.value,
-        time: els.time.value,
-        order: els.order.value,
-        days: els.days.filter((c) => c.checked).map((c) => Number(c.value)),
-      }));
-      panel.hidden = true;
-      await loadPosts();
-      if (r.skipped > 0) alert(`${r.skipped} post(s) could not be moved \u2014 they were being published while you rescheduled.`);
+      await refreshData();
+      busyDialog(false);
+      closeDialog();
+      toast(
+        `${result.updated} posts rescheduled.${result.skipped ? ` ${result.skipped} could no longer be moved.` : ''}`,
+      );
     } catch (err) {
-      els.msg.hidden = false;
-      els.msg.textContent = err.message;
+      dialogError(err.message);
     } finally {
-      els.apply.disabled = false;
-      els.apply.textContent = 'Apply new schedule';
+      busyDialog(false);
+      if ($('#save-bulk')) $('#save-bulk').disabled = false;
     }
-  });
+  };
+};
 
-  reschedUI[platform] = { update };
-}
-
-/* ---------- posting schedule settings and suggestions ---------- */
-
-let suggestedSlot = null;
-let slotRequest = 0;
-
-function updateScheduleButton() {
-  $('#submit-btn').disabled = (form.scheduleMode.value === 'next' && !suggestedSlot);
-}
-
-function applyScheduleMode() {
-  const manual = form.scheduleMode.value === 'manual';
-  $('#manual-schedule').hidden = !manual;
-  $('#next-slot-panel').hidden = manual;
-  form.scheduledAt.disabled = !manual;
-  form.scheduledAt.required = manual;
-  updateScheduleButton();
-}
-
-async function refreshNextSlot() {
-  const request = ++slotRequest;
-  suggestedSlot = null;
-  updateScheduleButton();
-  $('#next-slot').textContent = 'Finding next available slot…';
-  try {
-    const slot = await api('/api/next-slot', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        platform: platformSelect.value,
-        heldSlots: uploadQueue.filter((job) => job.platform === platformSelect.value && job.status !== 'done')
-          .map((job) => job.scheduledAt),
-      }),
-    });
-    if (request !== slotRequest) return;
-    suggestedSlot = slot;
-    const when = new Date(slot.scheduledAt).toLocaleString(undefined, {
-      timeZone: slot.timezone, weekday: 'long', year: 'numeric', month: 'long', day: 'numeric',
-      hour: '2-digit', minute: '2-digit',
-    });
-    $('#next-slot').textContent = `Next available: ${when} (${slot.timezone})`;
-  } catch (err) {
-    if (request !== slotRequest) return;
-    $('#next-slot').textContent = `Could not find a slot: ${err.message}. Retry or pick a specific date and time.`;
+function renderSettings() {
+  const status = state.status;
+  for (const p of ['youtube', 'instagram']) {
+    const connected = status[p].connected && !status[p].error;
+    $(`#channel-${p} .connection-dot`).className =
+      `connection-dot ${connected ? 'connected' : 'issue'}`;
+    $(`#channel-${p}`).title =
+      `${names[p]}: ${connected ? 'Connected' : status[p].configured ? 'Needs connection' : 'Not configured'}`;
   }
-  updateScheduleButton();
-}
-
-form.scheduleMode.addEventListener('change', () => {
-  applyScheduleMode();
-  refreshNextSlot();
-});
-platformSelect.addEventListener('change', refreshNextSlot);
-$('#refresh-slot').addEventListener('click', refreshNextSlot);
-$('#configure-schedule').addEventListener('click', () => {
-  $('#posting-settings').open = true;
-  $('#settings').scrollIntoView({ behavior: 'smooth' });
-});
-$('#manual-timezone').textContent = `Your browser timezone: ${Intl.DateTimeFormat().resolvedOptions().timeZone}`;
-applyScheduleMode();
-
-async function loadPostingSchedule() {
-  const message = $('#settings-msg');
-  try {
-    const schedule = await api('/api/settings/posting-schedule');
-    const fields = $('#posting-schedule-fields');
-    fields.innerHTML = '';
-    for (const { key, label } of PLATFORMS) {
-      const spec = schedule[key];
-      const group = document.createElement('fieldset');
-      group.className = 'posting-platform';
-      group.dataset.platform = key;
-      group.innerHTML = `
-        <legend>${label}</legend>
-        <div class="posting-days">
-          ${DAY_ORDER.map((day) => `<label class="day-pick"><input type="checkbox" value="${day}" />${DAY_NAMES[day]}</label>`).join('')}
-        </div>
-        <div class="row">
-          <label>Post at<input type="time" name="time" required /></label>
-          <label>Timezone<input type="text" name="timezone" list="posting-timezones" placeholder="Europe/Stockholm" required /></label>
-        </div>`;
-      group.querySelectorAll('input[type="checkbox"]').forEach((box) => { box.checked = spec.days.includes(Number(box.value)); });
-      group.querySelector('[name="time"]').value = spec.time;
-      group.querySelector('[name="timezone"]').value = spec.timezone;
-      fields.appendChild(group);
-    }
-    const zones = document.createElement('datalist');
-    zones.id = 'posting-timezones';
-    const availableZones = typeof Intl.supportedValuesOf === 'function'
-      ? Intl.supportedValuesOf('timeZone') : ['Europe/Stockholm', 'UTC'];
-    for (const zone of new Set(['UTC', ...availableZones])) {
-      const option = document.createElement('option');
-      option.value = zone;
-      zones.appendChild(option);
-    }
-    fields.appendChild(zones);
-    $('#save-schedule').disabled = false;
-  } catch (err) {
-    $('#posting-settings').open = true;
-    message.hidden = false;
-    message.className = 'form-msg err';
-    message.textContent = `Could not load posting settings: ${err.message}. Reload to try again.`;
+  $('#connections').innerHTML = ['youtube', 'instagram']
+    .map((p) => {
+      const account = status[p];
+      const connected = account.connected && !account.error;
+      let detail = connected
+        ? p === 'instagram' && account.username
+          ? `Connected as @${account.username}`
+          : 'Account connected.'
+        : account.configured
+          ? 'Connect your account to publish scheduled posts.'
+          : `Add your ${names[p]} app credentials to the server’s .env file, then restart the app.`;
+      if (account.error) detail = account.error;
+      if (p === 'instagram' && account.tokenExpiresAt) {
+        const days = Math.ceil(
+          (Date.parse(account.tokenExpiresAt) - Date.now()) / 86400000,
+        );
+        detail +=
+          days > 0
+            ? ` Token expires in ${days} days; refreshes automatically.`
+            : ' Token expired. Reconnect your account.';
+      }
+      return `<section class="settings-card"><div class="channel-title"><span class="platform-icon">${icon(p)}</span><h3>${names[p]}</h3><span class="badge ${connected ? 'done' : ''}">${connected ? 'Connected' : 'Not connected'}</span></div><p>${esc(detail)}</p>${account.configured ? `<a class="btn small" href="/auth/${p}">${connected ? 'Reconnect' : 'Connect'} ${names[p]} ↗</a>` : '<p class="muted">See the project README for account setup instructions.</p>'}</section>`;
+    })
+    .join('');
+  // Keep in-progress routine edits intact during connection/storage refreshes.
+  if (!$('#routine-fields').children.length) renderRoutine();
+  const storage = status.storage;
+  if (storage) {
+    $('#storage-detail').textContent =
+      `${size(storage.uploadsBytes)} in ${storage.uploadCount} saved media files · ${size(storage.free)} free on disk`;
+    $('#storage-bar span').style.width =
+      `${Math.min(100, (storage.used / storage.total) * 100)}%`;
+    $('#storage-extra').textContent = storage.orphanCount
+      ? `${size(storage.orphanBytes)} in ${storage.orphanCount} leftover upload(s).`
+      : 'No leftover uploads.';
+    $('#cleanup').disabled = !storage.orphanCount;
   }
 }
-
-$('#posting-schedule-form').addEventListener('submit', async (event) => {
+function renderRoutine() {
+  const weekdays = [
+    [1, 'M', 'Monday'],
+    [2, 'T', 'Tuesday'],
+    [3, 'W', 'Wednesday'],
+    [4, 'T', 'Thursday'],
+    [5, 'F', 'Friday'],
+    [6, 'S', 'Saturday'],
+    [0, 'S', 'Sunday'],
+  ];
+  $('#routine-fields').innerHTML =
+    ['youtube', 'instagram']
+      .map((p) => {
+        const spec = state.routine[p];
+        return `<section class="settings-card"><div class="channel-title"><span class="platform-icon">${icon(p)}</span><h3>${names[p]}</h3></div><fieldset class="weekdays"><legend>Posting days</legend>${weekdays.map(([day, letter, name]) => `<label class="day-check" title="${name}"><input type="checkbox" name="${p}-days" value="${day}" aria-label="${name}" ${spec.days.includes(day) ? 'checked' : ''} /><span>${letter}</span></label>`).join('')}</fieldset><label class="field">Posting time<input type="time" name="${p}-time" required value="${spec.time}" /></label><label class="field">Timezone<input type="text" name="${p}-timezone" required list="timezones" value="${esc(spec.timezone)}" /></label></section>`;
+      })
+      .join('') +
+    `<datalist id="timezones">${(Intl.supportedValuesOf ? Intl.supportedValuesOf('timeZone') : [zone, 'UTC', 'Europe/Stockholm']).map((z) => `<option value="${esc(z)}"></option>`).join('')}</datalist>`;
+}
+$('#routine-form').onsubmit = async (event) => {
   event.preventDefault();
-  const message = $('#settings-msg');
-  const button = $('#save-schedule');
-  message.hidden = true;
-  const schedule = {};
-  for (const group of document.querySelectorAll('.posting-platform')) {
-    schedule[group.dataset.platform] = {
-      days: [...group.querySelectorAll('input[type="checkbox"]:checked')].map((box) => Number(box.value)),
-      time: group.querySelector('[name="time"]').value,
-      timezone: group.querySelector('[name="timezone"]').value.trim(),
-    };
-  }
+  const form = event.target;
+  const button = $('button[type=submit]', form);
   button.disabled = true;
+  const value = Object.fromEntries(
+    ['youtube', 'instagram'].map((p) => [
+      p,
+      {
+        days: $$(`input[name="${p}-days"]:checked`).map((el) => +el.value),
+        time: form.elements[`${p}-time`].value,
+        timezone: form.elements[`${p}-timezone`].value.trim(),
+      },
+    ]),
+  );
   try {
-    await api('/api/settings/posting-schedule', {
-      method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(schedule),
+    state.routine = await api('/api/settings/posting-schedule', {
+      method: 'PUT',
+      body: value,
     });
-    message.className = 'form-msg ok';
-    message.textContent = 'Posting schedule saved. Existing posts keep their dates.';
-    await refreshNextSlot();
+    $('#routine-message').textContent =
+      'Saved. New suggestions will follow your routine.';
+    toast('Posting routine saved.');
   } catch (err) {
-    message.className = 'form-msg err';
-    message.textContent = err.message;
+    $('#routine-message').textContent = err.message;
+    toast(err.message, true);
   } finally {
-    message.hidden = false;
     button.disabled = false;
   }
-});
-
-/* ---------- boot ---------- */
-
-renderFilterChips();
-for (const { key } of PLATFORMS) initResched(key);
-loadPostingSchedule();
-refreshNextSlot();
-loadStatus().catch(console.error);
-loadPosts().catch(console.error);
+};
+$('#cleanup').onclick = async () => {
+  $('#cleanup').disabled = true;
+  try {
+    const result = await api('/api/storage/cleanup', { method: 'POST' });
+    state.status.storage = result.storage;
+    renderSettings();
+    toast(
+      result.count
+        ? `Removed ${result.count} leftover upload(s), freeing ${size(result.bytes)}.`
+        : 'No idle uploads to remove yet. Recent uploads are kept safe.',
+    );
+  } catch (err) {
+    toast(err.message, true);
+    $('#cleanup').disabled = false;
+  }
+};
+async function initialize() {
+  const results = await Promise.allSettled([refreshData(), refreshStatus()]);
+  const errors = results.filter((r) => r.status === 'rejected');
+  if (errors.length) {
+    $('#page-error').hidden = false;
+    $('#page-error').textContent =
+      `Couldn’t load app data. ${errors[0].reason.message} Refresh this page to try again.`;
+  }
+}
+initialize();
+// Refresh the visible lists without disturbing an open editor or active selection.
 setInterval(() => {
-  if (editingKey === null) loadPosts().catch(() => {});
-}, 10000);
-setInterval(() => loadStatus().catch(() => {}), 30000);
+  if (
+    !document.hidden &&
+    !$('#dialog').open &&
+    !state.selected.size &&
+    !uploading &&
+    state.view !== 'settings'
+  )
+    refreshData().catch(() => {
+      $('#page-error').hidden = false;
+      $('#page-error').textContent =
+        'Connection lost. The app will refresh when the server is available again.';
+    });
+}, 30000);

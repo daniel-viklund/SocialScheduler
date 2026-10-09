@@ -1,139 +1,232 @@
 <!doctype html>
 <html lang="en">
-<head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Social Scheduler</title>
-  <link rel="stylesheet" href="style.css" />
-</head>
-<body>
-  <main>
-    <header>
-      <h1>Social Scheduler</h1>
-      <p class="sub">Schedule uploads to YouTube and Instagram</p>
-    </header>
-
-    <section id="connections" class="card">
-      <h2>Connections</h2>
-      <div class="conn-row">
-        <div class="conn" id="conn-youtube">
-          <span class="dot"></span>
-          <span class="conn-name">YouTube</span>
-          <span class="conn-state">checking…</span>
-          <a class="btn small" id="yt-connect" href="/auth/youtube" hidden>Connect YouTube</a>
-        </div>
-        <div class="conn" id="conn-instagram">
-          <span class="dot"></span>
-          <span class="conn-name">Instagram</span>
-          <span class="conn-state">checking…</span>
-          <a class="btn small" id="ig-connect" href="/auth/instagram" hidden>Connect Instagram</a>
-        </div>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="theme-color" content="#171e35" />
+    <title>Media library · Social Scheduler</title>
+    <link rel="stylesheet" href="style.css" />
+  </head>
+  <body>
+    <a class="skip-link" href="#main">Skip to content</a>
+    <aside class="sidebar">
+      <a class="brand" href="#library"
+        ><span class="brand-mark">s<span>•</span></span
+        ><span>Social<span class="brand-light">Scheduler</span></span></a
+      >
+      <div class="workspace-label">NAVIGATION</div>
+      <nav aria-label="Main navigation">
+        <a href="#library" data-nav="library"
+          ><span data-icon="library"></span>Media library
+          <span id="library-count" class="nav-count">0</span></a
+        >
+        <a href="#schedule" data-nav="schedule"
+          ><span data-icon="calendar"></span>Schedule
+          <span id="schedule-count" class="nav-count">0</span></a
+        >
+        <a href="#settings" data-nav="settings"
+          ><span data-icon="settings"></span>Settings</a
+        >
+      </nav>
+      <div class="sidebar-bottom">
+        <div class="workspace-label">CHANNELS</div>
+        <a href="#settings" id="channel-youtube" class="channel-link"
+          >YouTube <span class="connection-dot"></span
+        ></a>
+        <a href="#settings" id="channel-instagram" class="channel-link"
+          >Instagram <span class="connection-dot"></span
+        ></a>
+        <a class="privacy-link" href="/privacy"
+          >Privacy policy <span>↗</span></a
+        >
       </div>
-      <p class="hint" id="conn-hint" hidden></p>
-
-      <div class="storage" id="storage" hidden>
-        <div class="storage-head">
-          <span class="storage-label">Disk</span>
-          <span class="storage-num" id="storage-num"></span>
-        </div>
-        <div class="bar"><div class="bar-fill" id="storage-bar"></div></div>
-        <p class="hint" id="storage-detail"></p>
-        <p class="hint storage-orphans" id="storage-orphans" hidden>
-          <span id="storage-orphan-text"></span>
-          <button type="button" class="btn small" id="storage-clean">Clean up</button>
-        </p>
-      </div>
-    </section>
-
-    <section class="card" id="settings">
-      <details id="posting-settings">
-        <summary>Settings · Posting schedule</summary>
-        <p class="hint">Choose posting days, a time, and timezone for each platform. Changes apply to new suggestions; existing posts keep their dates.</p>
-        <form id="posting-schedule-form">
-          <div id="posting-schedule-fields"></div>
-          <button type="submit" class="btn small primary" id="save-schedule" disabled>Save posting schedule</button>
-          <p class="form-msg" id="settings-msg" role="status" hidden></p>
-        </form>
-      </details>
-    </section>
-
-    <section class="card">
-      <h2>New scheduled post</h2>
-      <form id="post-form">
-        <label>
-          Video / image file
-          <input type="file" name="file" accept="video/*,image/*" required />
-        </label>
-        <label id="title-field">
-          Title
-          <input type="text" name="title" maxlength="100" placeholder="My awesome video" />
-        </label>
-        <label>
-          <span id="text-label">Description</span>
-          <textarea name="description" rows="3"></textarea>
-        </label>
-        <div class="row">
-          <label>
-            Platform
-            <select name="platform" id="platform-select">
+    </aside>
+    <div class="app-shell">
+      <header class="topbar">
+        <span
+          >Social Scheduler
+          <span class="breadcrumb"
+            >/ <span id="breadcrumb">Media library</span></span
+          ></span
+        >
+      </header>
+      <main id="main" tabindex="-1">
+        <div id="page-error" class="notice error" role="alert" hidden></div>
+        <section
+          id="view-library"
+          class="view"
+          aria-labelledby="library-heading"
+        >
+          <div class="page-heading">
+            <div>
+              <h1 id="library-heading">Media library</h1>
+              <p>Upload files, organize by platform, and schedule posts.</p>
+            </div>
+            <button class="btn primary" data-action="upload">
+              <span data-icon="plus"></span>Upload files
+            </button>
+          </div>
+          <div class="summary-strip" id="library-summary"></div>
+          <div class="section-heading">
+            <h2>Files <span id="media-total" class="count-label"></span></h2>
+          </div>
+          <div class="library-toolbar">
+            <div
+              id="platform-tabs"
+              class="tabs"
+              aria-label="Filter by platform"
+            ></div>
+            <label class="search"
+              ><span data-icon="search"></span
+              ><input
+                id="library-search"
+                type="search"
+                placeholder="Search your files…"
+                aria-label="Search library"
+            /></label>
+          </div>
+          <div class="filter-row">
+            <label class="check-label"
+              ><input id="select-all" type="checkbox" />Select all
+              <span id="visible-count" class="muted"></span
+            ></label>
+            <div class="inline">
+              <label class="sr-only" for="media-kind">Media type</label
+              ><select id="media-kind">
+                <option value="all">All media</option>
+                <option value="video">Videos</option>
+                <option value="image">Images</option></select
+              ><label class="sr-only" for="media-state">Library status</label
+              ><select id="media-state">
+                <option value="all">All files</option>
+                <option value="unused">Not scheduled yet</option>
+                <option value="used">Used in posts</option>
+              </select>
+            </div>
+          </div>
+          <div id="media-grid" class="media-grid" aria-live="polite">
+            <p class="muted">Loading your library…</p>
+          </div>
+          <div id="selection-bar" class="selection-bar" hidden>
+            <span id="selection-count"></span
+            ><button class="btn text-light" id="clear-selection">Clear</button
+            ><span class="selection-spacer"></span
+            ><button class="btn light" id="categorize-selected">
+              Categorize</button
+            ><button class="btn primary" id="schedule-selected">
+              <span data-icon="calendar"></span>Schedule selected
+            </button>
+          </div>
+        </section>
+        <section
+          id="view-schedule"
+          class="view"
+          aria-labelledby="schedule-heading"
+          hidden
+        >
+          <div class="page-heading">
+            <div>
+              <h1 id="schedule-heading">Schedule</h1>
+              <p>View scheduled, published, and failed posts.</p>
+            </div>
+            <div class="heading-actions">
+              <button class="btn" data-action="pick-media">
+                <span data-icon="library"></span>Choose from library
+              </button>
+              <button class="btn primary" data-action="upload-schedule">
+                <span data-icon="upload"></span>Upload &amp; schedule
+              </button>
+            </div>
+          </div>
+          <div class="summary-strip" id="schedule-summary"></div>
+          <div class="library-toolbar">
+            <div
+              id="post-tabs"
+              class="tabs"
+              aria-label="Filter posts by status"
+            ></div>
+            <label class="sr-only" for="post-platform">Platform</label
+            ><select id="post-platform">
+              <option value="all">All platforms</option>
               <option value="youtube">YouTube</option>
               <option value="instagram">Instagram</option>
             </select>
-          </label>
-        </div>
-        <label>
-          Scheduling
-          <select name="scheduleMode" id="schedule-mode">
-            <option value="next">Next available slot</option>
-            <option value="manual">Pick a specific date and time</option>
-          </select>
-        </label>
-        <div id="next-slot-panel" class="slot-preview">
-          <p id="next-slot" role="status">Finding next available slot…</p>
-          <button type="button" class="btn small" id="refresh-slot">Refresh suggestion</button>
-          <button type="button" class="btn small" id="configure-schedule">Edit posting schedule</button>
-        </div>
-        <label id="manual-schedule" hidden>
-          Publish at
-          <input type="datetime-local" name="scheduledAt" disabled />
-          <span class="hint" id="manual-timezone"></span>
-        </label>
-        <button type="submit" class="btn primary" id="submit-btn" disabled>Schedule</button>
-        <p class="form-msg" id="form-msg" hidden></p>
-      </form>
-    </section>
-
-    <section class="card" id="upload-queue" hidden>
-      <h2>Upload queue</h2>
-      <p class="hint">Keep this tab open until uploads finish. Files upload one at a time; you can keep scheduling while they upload.</p>
-      <div id="upload-queue-list"></div>
-    </section>
-
-    <div class="list-filter">
-      <span class="filter-label">Show</span>
-      <div class="chips" id="filter-chips"></div>
+          </div>
+          <div class="section-heading">
+            <p class="muted" id="schedule-timezone"></p>
+            <button class="btn small" id="bulk-reschedule">
+              Reschedule upcoming
+            </button>
+          </div>
+          <div id="post-list" aria-live="polite"></div>
+        </section>
+        <section
+          id="view-settings"
+          class="view"
+          aria-labelledby="settings-heading"
+          hidden
+        >
+          <div class="page-heading">
+            <div>
+              <h1 id="settings-heading">Settings</h1>
+              <p>Manage connected accounts, posting times, and storage.</p>
+            </div>
+          </div>
+          <h2 class="settings-heading">Connected channels</h2>
+          <div id="connections" class="settings-grid"></div>
+          <div class="section-heading">
+            <div>
+              <h2>Posting routine</h2>
+              <p class="muted">
+                These days determine suggested posting slots. Existing posts
+                keep their dates.
+              </p>
+            </div>
+          </div>
+          <form id="routine-form">
+            <div id="routine-fields" class="settings-grid"></div>
+            <div class="form-footer">
+              <p id="routine-message" role="status"></p>
+              <button class="btn primary" type="submit">
+                Save posting routine
+              </button>
+            </div>
+          </form>
+          <section class="storage-card">
+            <div>
+              <h2>Storage</h2>
+              <p id="storage-detail" class="muted">Loading storage…</p>
+            </div>
+            <div id="storage-bar" class="storage-track"><span></span></div>
+            <div class="inline spread">
+              <p id="storage-extra" class="muted"></p>
+              <button class="btn small" id="cleanup">
+                Clean up interrupted uploads
+              </button>
+            </div>
+          </section>
+        </section>
+      </main>
     </div>
-
-    <section class="card">
-      <div class="card-head">
-        <h2>Scheduled for YouTube</h2>
-        <button type="button" class="btn small" id="resched-btn-youtube" hidden
-          title="Spread every pending YouTube post over a new cadence">Reschedule all…</button>
+    <section
+      id="upload-progress"
+      class="upload-progress"
+      aria-label="Upload queue"
+      hidden
+    ></section>
+    <dialog id="dialog" aria-labelledby="dialog-title">
+      <div class="dialog-header">
+        <div>
+          <div id="dialog-eyebrow" class="eyebrow"></div>
+          <h2 id="dialog-title"></h2>
+        </div>
+        <button id="close-dialog" class="icon-btn" aria-label="Close dialog">
+          ✕
+        </button>
       </div>
-      <div class="resched" id="resched-youtube" hidden></div>
-      <div id="posts-youtube"><p class="hint">Loading…</p></div>
-    </section>
-
-    <section class="card">
-      <div class="card-head">
-        <h2>Scheduled for Instagram</h2>
-        <button type="button" class="btn small" id="resched-btn-instagram" hidden
-          title="Spread every pending Instagram post over a new cadence">Reschedule all…</button>
-      </div>
-      <div class="resched" id="resched-instagram" hidden></div>
-      <div id="posts-instagram"><p class="hint">Loading…</p></div>
-    </section>
-  </main>
-  <script src="app.js"></script>
-</body>
+      <div id="dialog-content"></div>
+    </dialog>
+    <div id="toast" class="toast" role="status" hidden></div>
+    <script src="app.js" defer></script>
+  </body>
 </html>
