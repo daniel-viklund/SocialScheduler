@@ -214,6 +214,30 @@ app.post('/api/next-slot', (req, res) => {
   res.set('Cache-Control', 'no-store').json(getNextSlot(platform, new Date(), heldSlots));
 });
 
+// Preview local files before they exist in the media library. Calculate the
+// whole selection together so successive files get distinct platform dates.
+app.post('/api/next-slots', (req, res) => {
+  const { platforms, heldSlots = {} } = req.body || {};
+  const valid = ['youtube', 'instagram'];
+  if (!Array.isArray(platforms) || !platforms.length || platforms.length > 500 ||
+      platforms.some((platform) => !valid.includes(platform)) ||
+      !heldSlots || typeof heldSlots !== 'object' || Array.isArray(heldSlots) ||
+      Object.keys(heldSlots).some((platform) => !valid.includes(platform)) ||
+      valid.some((platform) => heldSlots[platform] !== undefined &&
+        (!Array.isArray(heldSlots[platform]) || heldSlots[platform].length > 500 ||
+         heldSlots[platform].some((slot) => typeof slot !== 'string' || !Number.isFinite(Date.parse(slot)))))) {
+    return res.status(400).json({ error: 'Choose up to 500 valid platforms and valid queued dates.' });
+  }
+  const held = Object.fromEntries(valid.map((platform) => [platform, [...(heldSlots[platform] || [])]]));
+  const now = new Date();
+  const slots = platforms.map((platform) => {
+    const slot = getNextSlot(platform, now, held[platform]);
+    held[platform].push(slot.scheduledAt);
+    return { platform, scheduledAt: slot.scheduledAt, timezone: slot.timezone };
+  });
+  res.set('Cache-Control', 'no-store').json({ slots });
+});
+
 app.get('/api/posts', (req, res) => {
   res.json(listPosts().map(withFile));
 });

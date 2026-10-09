@@ -143,3 +143,71 @@ test('retrying an upload after losing the response does not create another post'
   assert.equal(first.body.id, retry.body.id);
   assert.equal(db.listPosts().length, before + 1);
 });
+
+test('upload date previews allocate distinct platform slots without creating bookings', async () => {
+  const count = db.listPosts().length;
+  const yt = (await json('/api/next-slot?platform=youtube')).body;
+  const ig = (await json('/api/next-slot?platform=instagram')).body;
+  const held = { youtube: [yt.scheduledAt], instagram: [] };
+  const expectedYt = db.getNextSlot(
+    'youtube',
+    new Date(),
+    held.youtube,
+  ).scheduledAt;
+  const expectedSecondYt = db.getNextSlot('youtube', new Date(), [
+    ...held.youtube,
+    expectedYt,
+  ]).scheduledAt;
+  const expectedSecondIg = db.getNextSlot('instagram', new Date(), [
+    ig.scheduledAt,
+  ]).scheduledAt;
+  const preview = await json('/api/next-slots', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      platforms: ['youtube', 'instagram', 'youtube', 'instagram'],
+      heldSlots: held,
+    }),
+  });
+  assert.equal(preview.status, 200);
+  assert.deepEqual(
+    preview.body.slots.map((slot) => slot.scheduledAt),
+    [expectedYt, ig.scheduledAt, expectedSecondYt, expectedSecondIg],
+  );
+  assert.deepEqual(
+    preview.body.slots.map((slot) => slot.timezone),
+    [yt.timezone, ig.timezone, yt.timezone, ig.timezone],
+  );
+  assert.equal(db.listPosts().length, count);
+  assert.equal(
+    (await json('/api/next-slot?platform=youtube')).body.scheduledAt,
+    yt.scheduledAt,
+  );
+  // Removing an earlier file releases its suggested date for the remaining one.
+  const reduced = await json('/api/next-slots', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ platforms: ['youtube'] }),
+  });
+  assert.equal(reduced.body.slots[0].scheduledAt, yt.scheduledAt);
+});
+
+test('upload previews reject malformed platforms and queued dates', async () => {
+  for (const body of [
+    {},
+    { platforms: [] },
+    { platforms: ['invalid'] },
+    { platforms: Array(501).fill('youtube') },
+    { platforms: ['youtube'], heldSlots: null },
+    { platforms: ['youtube'], heldSlots: { youtube: ['invalid'] } },
+    { platforms: ['youtube'], heldSlots: { instagram: 'not an array' } },
+    { platforms: ['youtube'], heldSlots: { unknown: [] } },
+  ]) {
+    const result = await json('/api/next-slots', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    assert.equal(result.status, 400);
+  }
+});
