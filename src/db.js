@@ -39,6 +39,22 @@ db.exec(`
     key TEXT PRIMARY KEY,
     value TEXT NOT NULL
   );
+
+  CREATE TABLE IF NOT EXISTS media (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    file_name TEXT NOT NULL UNIQUE,
+    original_name TEXT NOT NULL,
+    mime_type TEXT NOT NULL,
+    platforms TEXT NOT NULL DEFAULT '[]',
+    title TEXT NOT NULL DEFAULT '',
+    description TEXT NOT NULL DEFAULT '',
+    upload_id TEXT UNIQUE,
+    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+  );
+  CREATE TABLE IF NOT EXISTS schedule_requests (
+    request_id TEXT PRIMARY KEY,
+    post_ids TEXT NOT NULL
+  );
 `);
 
 // Upload request IDs make retrying after a lost response safe.
@@ -46,6 +62,19 @@ if (!db.prepare('PRAGMA table_info(posts)').all().some((column) => column.name =
   db.exec('ALTER TABLE posts ADD COLUMN upload_id TEXT');
 }
 db.exec('CREATE UNIQUE INDEX IF NOT EXISTS posts_upload_id ON posts(upload_id)');
+
+// Preserve existing uploads in the library once, without changing any posts.
+if (!getSetting('media_library_migrated')) {
+  db.transaction(() => {
+    for (const post of listPosts()) {
+      db.prepare(`INSERT OR IGNORE INTO media
+        (file_name, original_name, mime_type, platforms, title, description, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?)`).run(post.file_name, post.original_name, post.mime_type,
+        JSON.stringify(post.targets.map((t) => t.platform)), post.title, post.description, post.created_at);
+    }
+    setSetting('media_library_migrated', '1');
+  })();
+}
 
 export function getPostByUploadId(uploadId) {
   const row = db.prepare('SELECT id FROM posts WHERE upload_id = ?').get(uploadId);
@@ -167,7 +196,71 @@ export function retryPost(id) {
 
 // Every file the DB still points at. Anything else in uploads/ is dead weight.
 export function usedFileNames() {
-  return new Set(db.prepare(`SELECT file_name FROM posts`).all().map((r) => r.file_name));
+  return new Set(db.prepare(`SELECT file_name FROM posts UNION SELECT file_name FROM media`).all().map((r) => r.file_name));
+}
+
+function mediaRow(row) {
+  return row ? { ...row, platforms: JSON.parse(row.platforms),
+    post_count: db.prepare('SELECT COUNT(*) AS count FROM posts WHERE file_name = ?').get(row.file_name).count } : null;
+}
+
+export function listMedia() {
+  return db.prepare('SELECT * FROM media ORDER BY created_at DESC, id DESC').all().map(mediaRow);
+}
+
+export function getMedia(id) {
+  return mediaRow(db.prepare('SELECT * FROM media WHERE id = ?').get(id));
+}
+
+export function getMediaByUploadId(id) {
+  return mediaRow(db.prepare('SELECT * FROM media WHERE upload_id = ?').get(id));
+}
+
+export function createMedia({ fileName, originalName, mimeType, platforms, uploadId = null }) {
+  const result = db.prepare(`INSERT INTO media (file_name, original_name, mime_type, platforms, upload_id, title)
+    VALUES (?, ?, ?, ?, ?, ?)`).run(fileName, originalName, mimeType, JSON.stringify(platforms), uploadId,
+    originalName.replace(/\.[^.]+$/, '').slice(0, 100));
+  return getMedia(result.lastInsertRowid);
+}
+
+export function updateMedia(id, { platforms, title, description }) {
+  db.prepare('UPDATE media SET platforms = ?, title = ?, description = ? WHERE id = ?')
+    .run(JSON.stringify(platforms), title, description, id);
+  return getMedia(id);
+}
+
+export function deleteMedia(id) {
+  const media = getMedia(id);
+  if (!media) return null;
+  if (media.post_count) throw Object.assign(new Error('Remove the posts using this file from Schedule before deleting it.'), { status: 409 });
+  db.prepare('DELETE FROM media WHERE id = ?').run(id);
+  return media;
+}
+
+export function getScheduleRequest(requestId) {
+  const row = db.prepare('SELECT post_ids FROM schedule_requests WHERE request_id = ?').get(requestId);
+  return row ? JSON.parse(row.post_ids).map(getPost).filter(Boolean) : null;
+}
+
+// Confirm the entire selection together, or leave it entirely unscheduled.
+export function scheduleMediaBatch(items, mode, requestId) {
+  return db.transaction(() => {
+    const existing = getScheduleRequest(requestId);
+    if (existing) return existing;
+    const posts = items.map((item) => {
+      const media = getMedia(item.mediaId);
+      if (!media) throw Object.assign(new Error('A selected file was removed. Refresh the library.'), { status: 409 });
+      return (mode === 'next' ? createPostInNextSlot : createPost)({
+        title: item.title, description: item.description, fileName: media.file_name,
+        originalName: media.original_name, mimeType: media.mime_type,
+        scheduledAt: item.scheduledAt,
+        platforms: [item.platform],
+      });
+    });
+    db.prepare('INSERT INTO schedule_requests (request_id, post_ids) VALUES (?, ?)')
+      .run(requestId, JSON.stringify(posts.map((p) => p.id)));
+    return posts;
+  }).immediate();
 }
 
 export function getSetting(key) {

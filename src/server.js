@@ -14,6 +14,7 @@ import * as youtube from './youtube.js';
 import * as instagram from './instagram.js';
 import { prepareForInstagram, MediaError, REEL_MAX_BYTES, IMAGE_MAX_BYTES } from './mediacheck.js';
 import { startScheduler } from './scheduler.js';
+import { mountLibraryRoutes } from './library-api.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const PORT = process.env.PORT || 3000;
@@ -21,7 +22,8 @@ const PORT = process.env.PORT || 3000;
 const MAX_UPLOAD_BYTES = Number(process.env.MAX_UPLOAD_GB || 16) * 1024 ** 3;
 
 export const app = express();
-app.use(express.json());
+// Batch scheduling can contain captions for up to 100 posts.
+app.use(express.json({ limit: '1mb' }));
 
 // Cloudflare rewrites our `max-age=0` into a 4-hour *browser* TTL for .js/.css,
 // so after a deploy a browser keeps running the old front-end until that
@@ -180,6 +182,8 @@ function withFile(post) {
     return { ...post, file_size: null, file_missing: true };
   }
 }
+
+mountLibraryRoutes(app, upload, withFile);
 
 app.get('/api/settings/posting-schedule', (req, res) => {
   res.set('Cache-Control', 'no-store').json(getPostingSchedule());
@@ -340,7 +344,7 @@ app.delete('/api/posts/:id', (req, res) => {
     return res.status(409).json({ error: 'Post is currently being published and cannot be deleted' });
   }
   deletePost(post.id);
-  fs.rm(path.join(UPLOADS_DIR, post.file_name), { force: true }, () => {});
+  if (!usedFileNames().has(post.file_name)) fs.rmSync(path.join(UPLOADS_DIR, post.file_name), { force: true });
   res.json({ ok: true });
 });
 
