@@ -1,8 +1,9 @@
 # Social Scheduler
 
 A small self-hosted web app for scheduling uploads to **YouTube** and **Instagram**.
-Pick a video (or image, for Instagram), pick the platform, write the text, confirm the
-next available posting slot (or choose a specific date and time) — a background scheduler uploads it automatically when the time comes.
+Upload videos and images into a reusable **Media library**, organize them by platform,
+and schedule one or several whenever you are ready. A background scheduler publishes
+confirmed posts automatically when their time comes.
 
 - **YouTube** — YouTube Data API v3 with OAuth (one-click "Connect YouTube" in the UI)
 - **Instagram** — Meta Graph API content publishing (Reels for videos, feed posts for images)
@@ -19,36 +20,80 @@ npm start              # http://localhost:3000
 The scheduler checks every minute for due posts. Posts that came due while the app
 was stopped are published as soon as it starts again.
 
-## Posting schedule
+## Media library and scheduling
 
-Open **Settings · Posting schedule** on the website to choose weekdays, a posting
-time, and timezone separately for each platform. Defaults are YouTube on Fridays
-and Instagram on Mondays and Fridays, both at 18:00 Europe/Stockholm. Settings are
-saved in SQLite and shared across browsers.
+The interface has three areas:
 
-New posts default to **Next available slot**. Suggestions search forward from now,
-fill gaps, and skip existing bookings on that platform, including manual bookings
-and posts created before the latest settings change. Any booking occupies its entire calendar
-date in that platform’s configured timezone, even if its time differs from the
-recurring posting time. Manual scheduling can still explicitly choose that date.
-Changing settings never moves existing posts. **Pick a specific date and time**
-keeps manual scheduling available, using the browser timezone displayed below it.
+- **Media library** — upload multiple videos or images, preview files, search and filter,
+  and categorize files for YouTube, Instagram, both platforms, or neither. Categories
+  are organizational labels; they do not schedule or publish anything. Save default
+  titles and captions in file details, and change them for individual posts later.
+- **Schedule** — review upcoming, published, and failed posts. Edit text and dates,
+  retry failed targets, or spread upcoming posts across new dates with a preview.
+- **Settings** — connect accounts, choose your posting routine, and manage storage.
 
-Recurring times follow the configured timezone through daylight saving changes.
-A nonexistent spring-forward time is skipped; a repeated autumn time uses its first
-occurrence only. The server checks availability again after an upload; if the
-suggested slot changed, review the updated suggestion and submit again.
+Choose **Upload files** or drop files onto the library. Select **Save to library** to
+organize files without a publishing date. Set a common platform category,
+then adjust individual files if needed. Uploads run one at a time, with individual
+progress and retry controls. Successful files are saved immediately, even if another
+file fails. Keep the tab open until uploads finish; pending files are held in browser
+memory. Retry reuses the same upload ID to avoid duplicate library entries if a response
+is lost. Saved files persist across reloads and server restarts.
 
-Pressing **Schedule** adds the file to an upload queue and immediately frees the
-form for the next video. Uploads run one at a time, with separate progress and
-retry controls. Pending queue entries count toward next-slot suggestions in that
-tab. Removing or failing an earlier upload does not move later confirmed slots.
-Keep the tab open until uploads finish; the queue is held in browser memory and
-is not restored after a reload. Retry uses the same upload ID to avoid duplicate
-posts if the server saved an upload but its response was lost.
+To schedule while uploading, choose **Upload & schedule** in the upload dialog, or
+use the **Upload & schedule** button in Schedule. **Next available slot** is the default.
+Before uploading, every file shows its suggested date, time, and timezone separately
+for each selected platform. Suggestions skip booked dates, earlier files in the selection,
+and dates held by uploads already queued in this tab. They refresh when files or platforms
+change, periodically while the dialog is open, and with **Refresh dates**. A failed preview
+can be retried without losing your titles or captions.
 
-Run `npm test` for scheduling and API tests. Tests use a temporary data directory
-and do not start the publisher or change existing posts.
+These are suggestions, not reservations: after each upload finishes and passes validation, the server assigns the next free slot
+in each target platform's posting routine. It skips booked dates, including earlier files
+in the batch, and uses each platform's timezone. Files for both platforms can get different
+dates. Dates are chosen and booked together, so concurrent uploads cannot take the same
+platform slot; a slot that passes during a long upload is skipped automatically.
+
+Alternatively, select **Choose a date and time**, set a default date, and adjust each
+file's date. Manual dates use your browser timezone. In either mode you can adjust each
+file's platform, YouTube title/description, and Instagram caption before starting.
+The button uploads and schedules automatically, with the confirmed dates shown in the
+queue and Schedule; there is no separate library-selection step. Each file
+is independent, so a failed file does not prevent the others from finishing. For a file
+targeting both platforms, its two posts are scheduled together. Files also stay in the
+library. If scheduling fails, retry skips the completed upload and reuses the scheduling
+request ID to avoid duplicate posts. Keep the tab open until uploading and scheduling
+finish; files that finish uploading remain in the library even if scheduling is interrupted.
+
+To schedule existing files, select one or more and choose **Schedule selected** (up to 50 files
+per batch). Choose a platform for each file; **Both platforms** creates separate posts
+with their own text and dates. Review titles, captions, dates, and timezones before
+confirming. Files stay in the library and can be used again. Scheduling is atomic:
+if a file fails validation or a suggested slot was taken, none of that batch is saved.
+Go back to review fresh dates after a slot conflict. Scheduling retries reuse a request
+ID to prevent duplicate posts after a lost response.
+
+**Next available posting slots** follows the per-platform routine in Settings. Defaults
+are YouTube on Fridays and Instagram on Mondays and Fridays, at 18:00 Europe/Stockholm.
+Suggestions fill gaps and skip dates already booked on that platform, even if the
+existing booking has a different time. Selected files get distinct available dates.
+Recurring times follow daylight saving changes; missing spring-forward times are skipped
+and repeated autumn times use the first occurrence. Changing your routine keeps existing
+posts at their confirmed dates.
+
+**Choose a date and time** uses your browser timezone and lets you spread a selection
+a chosen number of days apart. Files targeting both platforms use the same manual time.
+Manual scheduling may share a date with an existing post. The Schedule view shows all
+dates in the browser timezone; recurring slot reviews show the routine's timezone.
+
+Existing uploaded posts are added to the library automatically on the first startup
+after upgrading, without moving any posts. Removing a scheduled post keeps its library
+file. A library file used by any scheduled or historical post cannot be deleted until
+those local posts are removed. Removing local history does not delete published posts
+from YouTube or Instagram. Cleanup protects both library files and post attachments.
+
+Run `npm test` for scheduling, migration, storage, validation, and library API tests.
+Tests use temporary data directories and do not start the publisher or change existing posts.
 
 ## YouTube setup
 
@@ -118,15 +163,15 @@ days of expiry; the UI shows the remaining days.
 Reels published through the API must be MP4/MOV, H.264/HEVC + AAC, ≤ 1920 px wide,
 23–60 fps, 3 s – 15 min, and **≤ 300 MB**. Feed images must be JPEG, ≤ 8 MB, with an
 aspect ratio between 4:5 and 1.91:1. Instagram only reports a bad file when the post
-comes due, so the app checks these limits itself when a post targets Instagram:
+comes due, so the app checks these limits with `ffprobe` when you confirm an Instagram schedule.
+Library uploads can be saved and categorized before they are ready to publish. If a
+file is incompatible, the scheduling dialog explains the problem, the whole batch
+remains unscheduled, and the original files stay in your library.
 
-- The form refuses an oversized file before uploading it.
-- `POST /api/posts` probes the uploaded file with `ffprobe` and rejects it with every
-  problem listed (the file is deleted, nothing is scheduled). YouTube-only posts are
-  not checked — YouTube takes almost anything.
-- The one thing it fixes rather than rejects is the metadata atom sitting at the end of
-  the file (most editors' default): the upload is losslessly remuxed in place with
-  `-movflags +faststart`, and the response says so.
+If the metadata atom sits at the end of an otherwise valid video, the app losslessly
+remuxes it with `-movflags +faststart` and reports the adjustment. The legacy direct
+upload endpoint (`POST /api/posts`) still validates at upload time and removes a rejected
+upload. YouTube-only files are not probed.
 
 This needs `ffmpeg`/`ffprobe` installed on the server (`apt install ffmpeg` on the Pi).
 Without it, Instagram posts are rejected with a message saying so.
@@ -189,33 +234,23 @@ copies would publish scheduled posts.
 
 ## How it works
 
-- `POST /api/posts` stores the file in `data/uploads/` and a row in SQLite (`data/scheduler.db`).
-- A cron job (`* * * * *`) picks up posts whose time has come and uploads to each
-  selected platform independently; per-platform status, result links, and errors are
-  shown in the UI, with a **Retry failed** button for anything that errored.
-- A post targets one platform, chosen from a dropdown. The text fields follow it:
-  YouTube gets a **Title** (required, it refuses an empty one) plus a description,
-  Instagram gets a single **Caption**, which is the only text a post shows there.
-  Switching to Instagram carries anything already typed as a title into the caption.
-- The API still accepts several platforms per post (`platforms` repeated), and posts
-  made that way still render in both lists. The scheduler builds an Instagram caption
-  as `title` + blank line + `description`, so an older post that only had a title
-  still publishes correctly, and editing it folds the two into one caption.
-- The UI lists posts per platform — a post targeting both appears in both lists, each
-  showing that platform's own state — and every card names the file it will publish,
-  flagging one that has gone missing from `data/uploads/`. A caption-only post is
-  listed by the first line of its caption.
-- The lists show pending posts by default; **Published**, **Failed** and **All** chips
-  filter both lists at once, each carrying a count. The choice is remembered per browser.
-- `PATCH /api/posts/:id` edits the title, description, and publish time of a post that
-  hasn't gone out yet (`scheduled`, `failed`, `partial`); the file itself can't be swapped.
-  An empty title is rejected only when the post targets YouTube.
+- Express serves the responsive frontend directly; no frontend build step is required.
+- `POST /api/media` saves one upload to `data/uploads/` with metadata in SQLite.
+  The UI sends multi-file selections as sequential requests with per-file progress.
+- `GET /api/media` lists library files, categories, file sizes, and usage counts.
+  `PATCH /api/media/:id` saves categories and default text; `DELETE` removes an unused file.
+- `POST /api/media/schedule/preview` calculates dates without creating posts.
+  `POST /api/media/schedule` validates the files and creates the entire selection in one
+  transaction. Each item targets one platform. A persisted request ID makes retry safe.
+- The legacy `POST /api/posts` endpoint still supports direct upload and scheduling.
+- Every minute, the scheduler publishes due posts. Each platform keeps independent
+  status, result links, and errors. Retry republishes only failed targets.
+- `PATCH /api/posts/:id` edits text and dates of scheduled, failed, or partially failed
+  posts. `POST /api/posts/reschedule` updates multiple dates in one transaction.
 - Uploaded media is served at `/media/<file>` so Instagram can fetch it via `PUBLIC_BASE_URL`.
-- An interrupted upload leaves a half-written file in `data/uploads/`. Files no post
-  references are swept at boot and hourly once they've been idle for an hour, and the
-  **Clean up** button in the UI (`POST /api/storage/cleanup`) removes them on demand
-  after 5 minutes of idleness. The disk readout counts scheduled files and leftovers
-  separately.
+- Unreferenced files from interrupted uploads are swept at boot and hourly after an hour
+  of idleness. Settings' **Clean up interrupted uploads** uses a five-minute idle window.
+  Files referenced by either the library or a post are always retained.
 
 Keep the app running (e.g. `pm2`, `launchd`, or a small VPS) so scheduled posts
 actually publish — nothing uploads while the process is stopped.
