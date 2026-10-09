@@ -253,7 +253,10 @@ export function scheduleMediaBatch(items, mode, requestId) {
       return (mode === 'next' ? createPostInNextSlot : createPost)({
         title: item.title, description: item.description, fileName: media.file_name,
         originalName: media.original_name, mimeType: media.mime_type,
-        scheduledAt: item.scheduledAt,
+        // Automatic uploads choose their slot after validation, inside the same
+        // write transaction as insertion. Earlier files and concurrent clients
+        // therefore cannot claim the same platform date.
+        scheduledAt: mode === 'auto' ? getNextSlot(item.platform).scheduledAt : item.scheduledAt,
         platforms: [item.platform],
       });
     });

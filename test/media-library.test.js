@@ -272,3 +272,94 @@ test('Instagram validation failure leaves every selected file unscheduled and av
   );
 });
 
+test('automatic upload scheduling skips occupied dates and safely retries concurrent requests', async () => {
+  const media = [
+    (await upload(['youtube'])).body,
+    (await upload(['youtube'])).body,
+  ];
+  const firstSlot = db.getNextSlot('youtube').scheduledAt;
+  // A manual booking earlier on the same platform date must consume that date.
+  db.createPost({
+    title: 'Existing booking',
+    description: '',
+    fileName: media[0].file_name,
+    originalName: media[0].original_name,
+    mimeType: media[0].mime_type,
+    scheduledAt: new Date(Date.parse(firstSlot) - 3600000).toISOString(),
+    platforms: ['youtube'],
+  });
+  const next = db.getNextSlot('youtube').scheduledAt;
+  assert.notEqual(next, firstSlot);
+  const afterNext = db.getNextSlot('youtube', new Date(), [next]).scheduledAt;
+  const bodies = media.map((m) => ({
+    mode: 'auto',
+    requestId: crypto.randomUUID(),
+    items: [{ mediaId: m.id, platform: 'youtube' }],
+  }));
+  const responses = await Promise.all(
+    bodies.map((body) => request('/api/media/schedule', 'POST', body)),
+  );
+  for (const response of responses) assert.equal(response.status, 201);
+  assert.deepEqual(
+    responses.map((r) => r.body.posts[0].scheduled_at).sort(),
+    [next, afterNext].sort(),
+  );
+  const count = db.listPosts().length;
+  const retry = await request('/api/media/schedule', 'POST', bodies[0]);
+  assert.equal(retry.status, 200);
+  assert.equal(retry.body.posts[0].id, responses[0].body.posts[0].id);
+  assert.equal(
+    retry.body.posts[0].scheduled_at,
+    responses[0].body.posts[0].scheduled_at,
+  );
+  assert.equal(db.listPosts().length, count);
+});
+
+test('automatic batch scheduling chooses fresh dates independently for each platform', async () => {
+  const media = [(await upload()).body, (await upload()).body];
+  const saved = db.getPostingSchedule();
+  try {
+    db.savePostingSchedule({
+      youtube: { days: [2], time: '09:15', timezone: 'America/New_York' },
+      instagram: { days: [4], time: '18:30', timezone: 'Europe/Stockholm' },
+    });
+    const expected = Object.fromEntries(
+      ['youtube', 'instagram'].map((p) => [p, db.getNextSlot(p).scheduledAt]),
+    );
+    const items = media.flatMap((m) =>
+      ['youtube', 'instagram'].map((platform) => ({
+        mediaId: m.id,
+        platform,
+        title: 'Automatic post',
+        description: '',
+        scheduledAt: '2000-01-01T00:00:00.000Z',
+      })),
+    );
+    // Exercise booking directly: API validation of real Instagram media is covered in browser tests.
+    const posts = db.scheduleMediaBatch(items, 'auto', crypto.randomUUID());
+    for (const platform of ['youtube', 'instagram']) {
+      const matching = posts.filter((p) => p.targets[0].platform === platform);
+      assert.equal(matching[0].scheduled_at, expected[platform]);
+      assert.ok(matching[1].scheduled_at > matching[0].scheduled_at);
+    }
+    assert.notEqual(posts[0].scheduled_at, posts[1].scheduled_at);
+  } finally {
+    db.savePostingSchedule(saved);
+  }
+});
+
+test('automatic scheduling still validates all files before creating posts', async () => {
+  const media = [(await upload()).body, (await upload(['instagram'])).body];
+  const before = db.listPosts().length;
+  const response = await request('/api/media/schedule', 'POST', {
+    mode: 'auto',
+    requestId: crypto.randomUUID(),
+    items: [
+      { mediaId: media[0].id, platform: 'youtube' },
+      { mediaId: media[1].id, platform: 'instagram' },
+    ],
+  });
+  assert.equal(response.status, 400);
+  assert.equal(db.listPosts().length, before);
+  for (const m of media) assert.equal(db.getMedia(m.id).post_count, 0);
+});

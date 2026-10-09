@@ -114,7 +114,7 @@ export function mountLibraryRoutes(app, upload, withFile) {
   );
 
   function cleanItems(body, preview) {
-    if (!['next', 'manual'].includes(body?.mode))
+    if (!['next', 'manual', 'auto'].includes(body?.mode))
       fail('Choose next available slots or a specific date.');
     if (
       !Array.isArray(body.items) ||
@@ -150,7 +150,7 @@ export function mountLibraryRoutes(app, upload, withFile) {
         );
       let scheduledAt = item.scheduledAt;
       let timezone;
-      if (preview && body.mode === 'next') {
+      if (preview && ['next', 'auto'].includes(body.mode)) {
         const slot = getNextSlot(
           item.platform,
           new Date(),
@@ -160,7 +160,9 @@ export function mountLibraryRoutes(app, upload, withFile) {
         timezone = slot.timezone;
         held[item.platform].push(scheduledAt);
       }
+      const automatic = body.mode === 'auto' && !preview;
       if (
+        !automatic &&
         (typeof scheduledAt !== 'string' ||
           !Number.isFinite(Date.parse(scheduledAt)) ||
           Date.parse(scheduledAt) <= Date.now())
@@ -171,7 +173,9 @@ export function mountLibraryRoutes(app, upload, withFile) {
         platform: item.platform,
         title: title.trim(),
         description,
-        scheduledAt: new Date(scheduledAt).toISOString(),
+        scheduledAt: automatic
+          ? undefined
+          : new Date(scheduledAt).toISOString(),
         timezone,
         originalName: media.original_name,
       };
