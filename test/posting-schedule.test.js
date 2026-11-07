@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { DEFAULT_POSTING_SCHEDULE, validatePostingSchedule, nextAvailableSlot } from '../src/posting-schedule.js';
+import { DEFAULT_POSTING_SCHEDULE, validatePostingSchedule, nextAvailableSlot, nextAvailableSlots } from '../src/posting-schedule.js';
 
 const friday = DEFAULT_POSTING_SCHEDULE.youtube;
 
@@ -63,4 +63,17 @@ test('a midnight booking blocks the evening slot on the same local date', () => 
 
 test('a later booking on the date blocks an earlier recurring time', () => {
   assert.equal(nextAvailableSlot(friday, ['2026-10-09T21:00:00Z'], '2026-10-05T10:00:00Z'), '2026-10-16T16:00:00.000Z');
+});
+
+
+test('batch allocation matches successive lookups across bookings and DST', () => {
+  const now = '2026-03-28T10:00:00Z';
+  const spec = { days: [0], time: '02:30', timezone: 'Europe/Stockholm' };
+  const occupied = ['2026-04-12T10:00:00Z', '2026-05-03T10:00:00Z'];
+  const expected = [];
+  for (let i = 0; i < 40; i++) {
+    expected.push(nextAvailableSlot(spec, [...occupied, ...expected], now));
+  }
+  assert.deepEqual(nextAvailableSlots(spec, occupied, now, 40), expected);
+  assert.deepEqual(nextAvailableSlots(spec, occupied, now, 0), []);
 });

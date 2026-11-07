@@ -373,6 +373,8 @@ function openUpload(initial = [], scheduleImmediately = false) {
   let scheduleMode = 'auto';
   let previewVersion = 0;
   let previewReady = false;
+  let previewInFlight = false;
+  let previewPending = false;
   showDialog(
     'Upload your files.',
     'UPLOAD OPTIONS',
@@ -423,16 +425,26 @@ function openUpload(initial = [], scheduleImmediately = false) {
     refreshPreviews();
   }
   const uploadList = $('#upload-files-list');
-  async function refreshPreviews() {
+  async function refreshPreviews(background = false) {
+    if (previewInFlight) {
+      if (!background) {
+        previewPending = true;
+        previewReady = false;
+        ++previewVersion;
+      }
+      return;
+    }
     const version = ++previewVersion;
-    previewReady = false;
+    const keepDates = background && previewReady;
+    if (!keepDates) previewReady = false;
     if (!uploadList.isConnected || !$('#dialog').open) return;
     const automatic = schedule && scheduleMode === 'auto';
     $('#refresh-upload-slots').hidden = !automatic;
     if (!automatic || !files.length) return;
-    $('#start-upload').disabled = true;
+    previewInFlight = true;
+    if (!keepDates) $('#start-upload').disabled = true;
     $('#refresh-upload-slots').disabled = true;
-    $$('[data-upload-slots]', uploadList).forEach((el) => {
+    if (!keepDates) $$('[data-upload-slots]', uploadList).forEach((el) => {
       el.innerHTML = '<p class="review-date">Finding next available dates…</p>';
     });
     const heldSlots = { youtube: [], instagram: [] };
@@ -483,17 +495,22 @@ function openUpload(initial = [], scheduleImmediately = false) {
         el.innerHTML = `<p class="notice error">Couldn’t load dates. ${esc(err.message)} Use Refresh dates to try again.</p>`;
       });
     } finally {
+      previewInFlight = false;
       if (current()) $('#refresh-upload-slots').disabled = false;
+      if (previewPending) {
+        previewPending = false;
+        refreshPreviews();
+      }
     }
   }
-  $('#refresh-upload-slots').onclick = refreshPreviews;
-  refreshUploadPreview = refreshPreviews;
+  $('#refresh-upload-slots').onclick = () => refreshPreviews();
+  refreshUploadPreview = () => refreshPreviews(true);
   const previewTimer = setInterval(() => {
     if (!uploadList.isConnected || !$('#dialog').open) {
       clearInterval(previewTimer);
       return;
     }
-    if (!document.hidden) refreshPreviews();
+    if (!document.hidden) refreshPreviews(true);
   }, 30000);
   function addFiles(incoming) {
     const errors = [];

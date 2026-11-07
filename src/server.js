@@ -7,7 +7,7 @@ import express from 'express';
 import multer from 'multer';
 import {
   DATA_DIR, UPLOADS_DIR, EDITABLE_STATUSES,
-  getPostByUploadId, getPostingSchedule, savePostingSchedule, getNextSlot, createPostInNextSlot,
+  getPostByUploadId, getPostingSchedule, savePostingSchedule, getNextSlot, getNextSlots, createPostInNextSlot,
   createPost, listPosts, getPost, updatePost, deletePost, retryPost, usedFileNames, bulkReschedule,
 } from './db.js';
 import * as youtube from './youtube.js';
@@ -228,11 +228,13 @@ app.post('/api/next-slots', (req, res) => {
          heldSlots[platform].some((slot) => typeof slot !== 'string' || !Number.isFinite(Date.parse(slot)))))) {
     return res.status(400).json({ error: 'Choose up to 500 valid platforms and valid queued dates.' });
   }
-  const held = Object.fromEntries(valid.map((platform) => [platform, [...(heldSlots[platform] || [])]]));
   const now = new Date();
+  const batches = Object.fromEntries(valid.map((platform) => [platform,
+    getNextSlots(platform, platforms.filter((p) => p === platform).length, now, heldSlots[platform] || []),
+  ]));
+  const offsets = { youtube: 0, instagram: 0 };
   const slots = platforms.map((platform) => {
-    const slot = getNextSlot(platform, now, held[platform]);
-    held[platform].push(slot.scheduledAt);
+    const slot = batches[platform][offsets[platform]++];
     return { platform, scheduledAt: slot.scheduledAt, timezone: slot.timezone };
   });
   res.set('Cache-Control', 'no-store').json({ slots });

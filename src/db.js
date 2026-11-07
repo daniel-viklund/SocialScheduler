@@ -1,5 +1,5 @@
 import Database from 'better-sqlite3';
-import { DEFAULT_POSTING_SCHEDULE, validatePostingSchedule, nextAvailableSlot } from './posting-schedule.js';
+import { DEFAULT_POSTING_SCHEDULE, validatePostingSchedule, nextAvailableSlots } from './posting-schedule.js';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -291,6 +291,10 @@ export function savePostingSchedule(value) {
 }
 
 export function getNextSlot(platform, now = new Date(), heldSlots = []) {
+  return getNextSlots(platform, 1, now, heldSlots)[0];
+}
+
+export function getNextSlots(platform, count, now = new Date(), heldSlots = []) {
   const schedule = getPostingSchedule()[platform];
   if (!schedule) throw new Error('Choose youtube or instagram');
   // Include all of the current local day, even a 25-hour DST day, plus future
@@ -300,7 +304,8 @@ export function getNextSlot(platform, now = new Date(), heldSlots = []) {
     JOIN post_targets t ON t.post_id = p.id
     WHERE t.platform = ? AND p.scheduled_at > ?
   `).all(platform, new Date(new Date(now).getTime() - 2 * 86400000).toISOString());
-  return { scheduledAt: nextAvailableSlot(schedule, [...occupied.map((p) => p.scheduled_at), ...heldSlots], now), ...schedule };
+  return nextAvailableSlots(schedule, [...occupied.map((p) => p.scheduled_at), ...heldSlots], now, count)
+    .map((scheduledAt) => ({ scheduledAt, ...schedule }));
 }
 
 export function createPostInNextSlot(post) {

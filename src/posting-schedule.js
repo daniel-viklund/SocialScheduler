@@ -41,6 +41,12 @@ function zonedClock(timezone) {
 }
 
 export function nextAvailableSlot(spec, occupied = [], now = new Date()) {
+  return nextAvailableSlots(spec, occupied, now, 1)[0];
+}
+
+export function nextAvailableSlots(spec, occupied = [], now = new Date(), count = 1) {
+  if (!count) return [];
+  const slots = [];
   const clock = zonedClock(spec.timezone);
   const nowMs = new Date(now).getTime();
   const localDay = new Date(clock(nowMs));
@@ -50,8 +56,9 @@ export function nextAvailableSlot(spec, occupied = [], now = new Date()) {
   const booked = new Set(occupied.map((date) => Math.floor(clock(new Date(date).getTime()) / 86400000)));
 
   // Each booking can consume at most one recurrence. Extra weeks cover DST gaps.
-  for (let day = 0; day < (booked.size + 3) * 7; day++) {
-    if (spec.days.includes(localDay.getUTCDay())) {
+  for (let day = 0; day < (booked.size + count + 2) * 7; day++) {
+    if (spec.days.includes(localDay.getUTCDay()) &&
+        !booked.has(Math.floor(localDay.getTime() / 86400000))) {
       const wallTime = localDay.getTime() + (hour * 60 + minute) * 60000;
       // Sample both sides of a timezone transition to find all valid offsets.
       const offsets = new Set([-36, 0, 36].map((hours) => {
@@ -64,7 +71,8 @@ export function nextAvailableSlot(spec, occupied = [], now = new Date()) {
       // one slot, at its first occurrence, never two posts on the same local slot.
       const slot = candidates[0];
       if (slot > nowMs && !booked.has(Math.floor(localDay.getTime() / 86400000))) {
-        return new Date(slot).toISOString();
+        slots.push(new Date(slot).toISOString());
+        if (slots.length === count) return slots;
       }
     }
     localDay.setUTCDate(localDay.getUTCDate() + 1);
