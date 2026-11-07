@@ -110,7 +110,15 @@ function toast(message, error = false) {
     error ? 8000 : 4500,
   );
 }
+function releaseDialogVideos() {
+  $$('video', $('#dialog')).forEach((video) => {
+    video.pause();
+    video.removeAttribute('src');
+    video.load();
+  });
+}
 function showDialog(title, eyebrow, content, wide = false) {
+  releaseDialogVideos();
   if ($('#dialog').open) $('#dialog').close();
   $('#dialog-title').textContent = title;
   $('#dialog-eyebrow').textContent = eyebrow;
@@ -125,7 +133,8 @@ function closeDialog() {
 }
 $('#close-dialog').onclick = closeDialog;
 $('#dialog').addEventListener('close', () => {
-  $$('video', $('#dialog')).forEach((video) => video.pause());
+  // A delayed close event can arrive after another dialog has opened.
+  if (!$('#dialog').open) releaseDialogVideos();
 });
 $('#dialog').addEventListener('cancel', (event) => {
   if (dialogBusy) event.preventDefault();
@@ -277,7 +286,7 @@ function renderLibrary() {
 function mediaCard(m) {
   const video = m.mime_type.startsWith('video/');
   const url = `/media/${encodeURIComponent(m.file_name)}`;
-  return `<article class="media-card${state.selected.has(m.id) ? ' selected' : ''}" data-media="${m.id}"><div class="media-cover"><button data-detail="${m.id}" aria-label="Preview ${esc(m.original_name)}">${icon(video ? 'video' : 'image', 'file-placeholder')}${!m.file_missing ? (video ? `<video src="${url}#t=0.1" preload="metadata" muted playsinline aria-hidden="true"></video>` : `<img src="${url}" alt="" loading="lazy" />`) : ''}</button><label class="media-check"><input type="checkbox" data-select="${m.id}" aria-label="Select ${esc(m.original_name)}" ${state.selected.has(m.id) ? 'checked' : ''} /></label><span class="media-type">${video ? 'Video' : 'Image'}</span></div><div class="media-body"><button class="file-title" data-detail="${m.id}" title="${esc(m.original_name)}">${esc(m.original_name)}</button><p class="file-meta${m.file_missing ? ' missing' : ''}">${size(m.file_size)} · ${new Date(m.created_at).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}</p><div class="badges">${m.platforms.length ? m.platforms.map(badge).join('') : '<span class="badge">Uncategorized</span>'}</div></div><div class="media-footer"><span>${m.post_count ? `Used in ${m.post_count} post${m.post_count === 1 ? '' : 's'}` : 'Not scheduled yet'}</span><button data-schedule="${m.id}" ${m.file_missing ? 'disabled' : ''}>Schedule →</button></div></article>`;
+  return `<article class="media-card${state.selected.has(m.id) ? ' selected' : ''}" data-media="${m.id}"><div class="media-cover"><button data-detail="${m.id}" aria-label="Preview ${esc(m.original_name)}">${icon(video ? 'video' : 'image', 'file-placeholder')}${!m.file_missing ? (video ? '' : `<img src="${url}" alt="" loading="lazy" />`) : ''}</button><label class="media-check"><input type="checkbox" data-select="${m.id}" aria-label="Select ${esc(m.original_name)}" ${state.selected.has(m.id) ? 'checked' : ''} /></label><span class="media-type">${video ? 'Video' : 'Image'}</span></div><div class="media-body"><button class="file-title" data-detail="${m.id}" title="${esc(m.original_name)}">${esc(m.original_name)}</button><p class="file-meta${m.file_missing ? ' missing' : ''}">${size(m.file_size)} · ${new Date(m.created_at).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}</p><div class="badges">${m.platforms.length ? m.platforms.map(badge).join('') : '<span class="badge">Uncategorized</span>'}</div></div><div class="media-footer"><span>${m.post_count ? `Used in ${m.post_count} post${m.post_count === 1 ? '' : 's'}` : 'Not scheduled yet'}</span><button data-schedule="${m.id}" ${m.file_missing ? 'disabled' : ''}>Schedule →</button></div></article>`;
 }
 function updateSelection() {
   $('#selection-bar').hidden = !state.selected.size;
@@ -466,10 +475,13 @@ function openUpload(initial = [], scheduleImmediately = false) {
     const platforms = files.flatMap((entry) => chosenPlatforms(entry.category));
     const current = () =>
       version === previewVersion && uploadList.isConnected && $('#dialog').open;
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 15000);
     try {
       const { slots } = await api('/api/next-slots', {
         method: 'POST',
         body: { platforms, heldSlots },
+        signal: controller.signal,
       });
       if (!current()) return;
       let offset = 0;
@@ -490,11 +502,15 @@ function openUpload(initial = [], scheduleImmediately = false) {
       previewReady = true;
       $('#start-upload').disabled = false;
     } catch (err) {
-      if (!current()) return;
+      if (!current() || keepDates) return;
+      const message = controller.signal.aborted
+        ? 'The date lookup timed out. Please try again.'
+        : err.message;
       $$('[data-upload-slots]', uploadList).forEach((el) => {
-        el.innerHTML = `<p class="notice error">Couldn’t load dates. ${esc(err.message)} Use Refresh dates to try again.</p>`;
+        el.innerHTML = `<p class="notice error">Couldn’t load dates. ${esc(message)} Use Refresh dates to try again.</p>`;
       });
     } finally {
+      clearTimeout(timeout);
       previewInFlight = false;
       if (current()) $('#refresh-upload-slots').disabled = false;
       if (previewPending) {
